@@ -38,9 +38,9 @@ You can create a small .cmd script to run converse.exe with your favorite argume
 @.\converse.exe w6jmk w1xsc-1
 @pause
 ```
-The script ends with a
+The
 [pause](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/pause)
-command to prevent the window from closing immediately after disconnecting from the remote station.
+command prevents the window from closing immediately after disconnecting from the remote station.
 You can create a
 [shortcut](https://www.computerhope.com/issues/ch000739.htm)
 to the .cmd script, to customize the properties of the command line window.
