@@ -663,21 +663,16 @@ interpreter.on('SIGTERM', function(info) {
     setTimeout(process.exit, 10);
 });
 
-var availablePorts = '';
 connection.on('frameReceived', function(frame) {
     switch(frame.dataKind) {
     case 'G':
         log.debug('frameReceived G');
-        availablePorts = frame.data.toString(charset);
-        break;
-    case 'X':
-        log.debug('frameReceived %j', frame);
-        if (!(frame.data && frame.data.toString('binary') == '\x01')) {
-            try {
-                const message = `The TNC has no port ${frame.port}.`;
-                // log.debug(newError(message, 'ENOENT'));
-                const parts = availablePorts.split(';');
-                const portCount = parseInt(parts[0]);
+        try {
+            const availablePorts = frame.data.toString('ascii');
+            const parts = availablePorts.split(';');
+            const portCount = parseInt(parts[0]);
+            if (localPort >= portCount) {
+                const message = `The TNC has no port ${localPort}.`;
                 const lines = [];
                 if (portCount <= 0) {
                     lines.push(message);
@@ -691,9 +686,14 @@ connection.on('frameReceived', function(frame) {
                     }
                 }
                 interpreter.outputLine(lines.join(OS.EOL) + OS.EOL);
-            } catch(err) {
-                log.error(err);
+                connection.destroy();
             }
+        } catch(err) {
+            log.error(err);
+        }
+        break;
+    case 'X':
+        if (!(frame.data && frame.data.toString('binary') == '\x01')) {
             connection.destroy();
         }
         break;
