@@ -1,0 +1,5 @@
+# The default behavior, in case people don't have core.autocrlf set.
+* text=auto
+
+# Files that are truly binary and should not be modified.
+*.exe binary
