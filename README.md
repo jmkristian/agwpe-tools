@@ -9,19 +9,34 @@ using an AGWPE-compatible TNC (e.g.
 
 This package provides a Windows program `converse.exe`,
 which you can use to interact with another station.
-It runs in a Windows PowerShell or "cmd" window, similar to the `telnet` or `ssh` programs.
+It runs in a command line window.
 You can watch a [demonstration video](https://youtu.be/lRvlnEeBrow/).
 
 To get started:
 1. Download the latest version of converse.exe
    [here](https://github.com/jmkristian/agwpe-tools/releases).
+   It's in the Assets section of each release.
 2. Start your TNC (e.g. Direwolf or SoundModem).
-3. Start PowerShell or cmd, and cd to the folder that contains converse.exe.
-4. Enter the command line:
+3. Open a PowerShell or Command Prompt (CMD) window.
+4. `cd` to the folder that contains converse.exe.
+5. Enter the command line:
 
 `.\converse.exe <your call sign> <remote call sign> --verbose`
 
 To see a summary of the command line options, run `.\converse.exe` (with no arguments).
+
+To communicate moderately large amounts of data,
+it's convenient to copy-n-paste to or from your command line window.
+I recommend enabling QuickEdit Mode (in the Options tab of the Properties dialog).
+To paste into the command line window, simply right-click.
+To copy from the command line window, select the text and then right-click.
+Be sure to select the complete width of the screen buffer, to copy all the text.
+To handle long lines of text, I recommend increasing the width
+of the screen buffer and window (in the Layout tab of the Properties dialog).
+
+Here's how to access the properties of
+[PowerShell](https://www.tutorialspoint.com/how-to-check-the-properties-of-the-windows-powershell-console) and
+[Command Prompt](http://unixwiz.net/techtips/cmd-window.html).
 
 ### Linux
 
@@ -31,7 +46,7 @@ To get started:
 
 1. [Clone](https://www.techrepublic.com/article/how-to-clone-github-repository/)
    the [agwpe-tools](https://github.com/jmkristian/agwpe-tools) repository.
-2. Start a shell and cd into your clone.
+2. Start a shell and `cd` into your clone.
 3. Check whether node.js is installed, by running the command `node --version`.
    If not, [install node.js](https://nodejs.org/en/download/).
    You'll need node version 8.0 or later.
@@ -50,6 +65,6 @@ It works on Windows 8 and Ubuntu 20, with
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions or on Mac.
 
-The converse.exe program was built by
+The converse.exe program for Windows was built by
 `node_modules/.bin/pkg.cmd -t node12-win-x86 converse.js`,
 running on node.js version 18.15.0.
