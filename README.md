@@ -25,18 +25,26 @@ To get started:
 
 To see a summary of the command line options, run `.\converse.exe` (with no arguments).
 
-To communicate moderately large amounts of data,
+To communicate large amounts of text,
 it's convenient to copy-n-paste to or from your command line window.
-I recommend enabling QuickEdit Mode (in the Options tab of the Properties dialog).
-To paste into the command line window, simply right-click.
-To copy from the command line window, select the text and then right-click.
-Be sure to select the complete width of the screen buffer, to copy all the text.
-To handle long lines of text, I recommend increasing the width
-of the screen buffer and window (in the Layout tab of the Properties dialog).
+I recommend enabling
+[QuickEdit Mode](https://www.techjunkie.com/boost-productivity-quickedit-mode-windows-command-prompt/).
+To copy all the data, be sure to select the complete width of the screen buffer.
+To handle long lines of text, I recommend increasing the width of the screen buffer and window
+(in the Layout tab of the Properties dialog).
 
-Here's how to access the properties of
-[PowerShell](https://www.tutorialspoint.com/how-to-check-the-properties-of-the-windows-powershell-console) and
-[Command Prompt](http://unixwiz.net/techtips/cmd-window.html).
+You can create a small .cmd script to run converse.exe with your favorite arguments, like this:
+```
+@.\converse.exe w6jmk w1xsc-1
+@pause
+
+```
+The script ends with a
+[pause](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/pause)
+command to prevent the window from closing immediately after disconnecting from the remote station.
+You can create a
+[shortcut](https://www.computerhope.com/issues/ch000739.htm)
+to the .cmd script, to customize the properties of the command line window.
 
 ### Linux
 
