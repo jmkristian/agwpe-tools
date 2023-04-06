@@ -37,7 +37,6 @@ You can create a small .cmd script to run converse.exe with your favorite argume
 ```
 @.\converse.exe w6jmk w1xsc-1
 @pause
-
 ```
 The script ends with a
 [pause](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/pause)
