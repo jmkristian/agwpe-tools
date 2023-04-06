@@ -65,6 +65,5 @@ It works on Windows 8 and Ubuntu 20, with
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions or on Mac.
 
-The converse.exe program for Windows was built by
-`node_modules/.bin/pkg.cmd -t node12-win-x86 converse.js`,
+The converse.exe program for Windows was built by `build.sh`,
 running on node.js version 18.15.0.
