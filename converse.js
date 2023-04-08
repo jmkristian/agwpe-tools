@@ -93,11 +93,7 @@ const agwLogger = Bunyan.createLogger({
     });
 });
 
-if (!(localAddress && remoteAddress)
-    || localPort < 0
-    || localPort > 255
-    || (ESC && ESC.length > 1)
-    || (TERM && TERM.length > 1)) {
+function showUsage(exitCode) {
     const myName = path.basename(process.argv[0])
           + ' ' + path.basename(process.argv[1]);
     console.error([
@@ -114,7 +110,7 @@ if (!(localAddress && remoteAddress)
         `--frame-length N: maximum number of bytes per frame transmitted to the TNC. default: 128`,
         `--verbose: output more information about what's happening.`,
     ].join(OS.EOL));
-    process.exit(1);
+    if (exitCode != null) process.exit(exitCode);
 }
 log.debug('%j', {
     localPort: localPort,
@@ -142,6 +138,16 @@ function controlify(from) {
     }
     return into;
 }
+
+if (ESC && ESC.length > 1) {
+    console.error(`The escape value must be a single character (not ${controlify(ESC)}).`)
+    showUsage(1);
+}
+if (TERM && TERM.length > 1) {
+    console.error(`The kill value must be a single character (not ${controlify(TERM)}).`)
+    showUsage(2);
+}
+
 function messageFromAGW(info) {
     return info && info.toString('latin1')
         .replace(allNULs, '')
@@ -594,35 +600,41 @@ class Interpreter extends Stream.Transform {
 } // Interpreter
 
 const interpreter = new Interpreter(tap);
-const connection = AGWPE.createConnection({
-    host: host,
-    port: port,
-    remoteAddress: remoteAddress.toUpperCase(),
-    localAddress: localAddress.toUpperCase(),
-    localPort: localPort,
-    via: via,
-    ID: ID,
-    frameLength: frameLength,
-    logger: agwLogger,
-}, function connectListener(info) {
-    process.stdin.pipe(interpreter).pipe(connection);
-    interpreter.outputLine(messageFromAGW(info) || `Connected to ${remoteAddress}`);
-    if (ESC) {
-        interpreter.outputLine(`(Type ${controlify(ESC)} to pause the conversation.)`
-                              + OS.EOL); // blank line
-    }
-});
+var connection = null;
+try {
+    connection = AGWPE.createConnection({
+        host: host,
+        port: port,
+        remoteAddress: remoteAddress,
+        localAddress: localAddress,
+        localPort: localPort,
+        via: via,
+        ID: ID,
+        frameLength: frameLength,
+        logger: agwLogger,
+    }, function connectListener(info) {
+        process.stdin.pipe(interpreter).pipe(connection);
+        interpreter.outputLine(messageFromAGW(info) || `Connected to ${remoteAddress}`);
+        if (ESC) {
+            interpreter.outputLine(`(Type ${controlify(ESC)} to pause the conversation.)`
+                                   + OS.EOL); // blank line
+        }
+    });
+} catch(err) {
+    console.warn(err);
+    showUsage(4);
+}
 connection.on('end', function(info) {
-    log.debug('connection emitted end(%j)', info || '')
+    log.debug('Connection emitted end(%j)', info || '')
     interpreter.outputLine(messageFromAGW(info) || `Disconnected from ${remoteAddress}`)
 });
 connection.on('close', function(info) {
-    log.debug('connection emitted close(%s)', info || '')
+    log.debug('Connection emitted close(%s)', info || '')
     setTimeout(process.exit, 10);
 });
 ['error', 'timeout'].forEach(function(event) {
     connection.on(event, function(err) {
-        log.warn('connection emitted %s(%s)', event, err || '');
+        console.warn('Connection %s %s', event, err || '');
     });
 });
 
@@ -664,10 +676,10 @@ interpreter.on('SIGTERM', function(info) {
 });
 
 connection.on('frameReceived', function(frame) {
-    switch(frame.dataKind) {
-    case 'G':
-        log.debug('frameReceived G');
-        try {
+    try {
+        switch(frame.dataKind) {
+        case 'G':
+            log.debug('frameReceived G');
             const availablePorts = frame.data.toString('ascii');
             const parts = availablePorts.split(';');
             const portCount = parseInt(parts[0]);
@@ -688,15 +700,15 @@ connection.on('frameReceived', function(frame) {
                 interpreter.outputLine(lines.join(OS.EOL) + OS.EOL);
                 connection.destroy();
             }
-        } catch(err) {
-            log.error(err);
+            break;
+        case 'X':
+            if (!(frame.data && frame.data.toString('binary') == '\x01')) {
+                connection.destroy();
+            }
+            break;
+        default:
         }
-        break;
-    case 'X':
-        if (!(frame.data && frame.data.toString('binary') == '\x01')) {
-            connection.destroy();
-        }
-        break;
-    default:
+    } catch(err) {
+        log.error(err);
     }
 });
