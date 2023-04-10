@@ -70,10 +70,8 @@ const EOT = '\x04'; // Ctrl+D = flush line, or EOF at the start of a raw line.
 const INT = '\x03'; // Ctrl+C = graceful kill
 const prompt = 'cmd:';
 
-const allINTs = new RegExp(INT, 'g');
 const allNULs = new RegExp('\0', 'g');
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
-const allTERMs = TERM ? new RegExp(TERM, 'g') : null;
 const inputBreak = new RegExp('\r|\n|' + EOT + (ESC ? '|' + ESC : ''));
 
 const logStream = bunyanFormat({outputMode: 'short', color: false}, process.stderr);
@@ -93,25 +91,6 @@ const agwLogger = Bunyan.createLogger({
     });
 });
 
-function showUsage(exitCode) {
-    const myName = path.basename(process.argv[0])
-          + ' ' + path.basename(process.argv[1]);
-    console.error([
-        `usage: ${myName} [options] <local call sign> <remote call sign>`,
-        `Supported options are:`,
-        `--host <address>: TCP host of the TNC. default: 127.0.0.1`,
-        `--port N: TCP port of the TNC. default: 8000`,
-        `--tnc-port N: TNC port (sound card number). range 0-255. default: 0`,
-        `--via <digis>: A comma-separated list of digipeater call signs.`,
-        `--ID <string>: identifies this station, e.g. when the local call sign is tactical.`,
-        `--encoding <string>: encoding of characters to and from bytes. default: UTF-8`,
-        `--eol <string>: represents end-of-line to the remote station. default: CR`,
-        `--escape <character>: switch from conversation to command mode. default: Ctrl+]`,
-        `--frame-length N: maximum number of bytes per frame transmitted to the TNC. default: 128`,
-        `--verbose: output more information about what's happening.`,
-    ].join(OS.EOL));
-    if (exitCode != null) process.exit(exitCode);
-}
 log.debug('%j', {
     localPort: localPort,
     localAddress: localAddress,
@@ -139,12 +118,68 @@ function controlify(from) {
     return into;
 }
 
+/** A Transform that optionally copies data into a second stream
+    (in addition to pushing it). Interpreter.transcribe uses this
+    to implement the 't' command.
+ */
+class Tee extends Stream.Transform {
+    constructor() {
+        super({
+            defaultEncoding: charset,
+            // Don't buffer very much data. The writer will
+            // handle flow control if the reader is slow.
+            readableHighWaterMark: 256,
+            writableHighWaterMark: 256,
+        });
+    }
+    _transform(chunk, encoding, callback) {
+        this.push(chunk, encoding);
+        if (this.copyTo) {
+            this.copyTo.write(chunk, encoding, callback);
+        } else if (callback) {
+            callback();
+        }
+    }
+    _flush(callback) {
+        log.debug('Tee._flush');
+        if (this.copyTo) {
+            this.copyTo.end(undefined, undefined, callback);
+        } else if (callback) {
+            callback();
+        }
+    }
+}
+const terminal = new Tee();
+terminal.pipe(process.stdout);
+
+function showUsage(exitCode) {
+    const arg0 = path.basename(process.argv[0]);
+    const myName = arg0 + ((arg0 == 'converse.exe') ? '' : (' ' + path.basename(process.argv[1])));
+    terminal.write([
+        '', // blank line
+        `usage: ${myName} [options] <local call sign> <remote call sign>`,
+        `Supported options are:`,
+        `--host <address>: TCP host of the TNC. default: 127.0.0.1`,
+        `--port N: TCP port of the TNC. default: 8000`,
+        `--tnc-port N: TNC port (sound card number). range 0-255. default: 0`,
+        `--via <digis>: A comma-separated list of digipeater call signs.`,
+        `--ID <string>: identifies this station, e.g. when the local call sign is tactical.`,
+        `--encoding <string>: encoding of characters to and from bytes. default: UTF-8`,
+        `--eol <string>: represents end-of-line to the remote station. default: CR`,
+        `--escape <character>: switch from conversation to command mode. default: Ctrl+]`,
+        `--frame-length N: maximum number of bytes per frame transmitted to the TNC. default: 128`,
+        `--verbose: output more information about what's happening.`,
+        '',
+    ].join(OS.EOL));
+    if (exitCode != null) process.exit(exitCode);
+}
+
 if (ESC && ESC.length > 1) {
-    console.error(`The escape value must be a single character (not ${controlify(ESC)}).`)
+    terminal.write(`The escape value must be a single character (not ${controlify(ESC)}).${OS.EOL}`)
     showUsage(1);
 }
 if (TERM && TERM.length > 1) {
-    console.error(`The kill value must be a single character (not ${controlify(TERM)}).`)
+    terminal.write(`The kill value must be a single character (not ${controlify(TERM)}).${OS.EOL}`)
     showUsage(2);
 }
 
@@ -161,9 +196,9 @@ function disconnectGracefully(signal) {
     connection.end(); // should cause a 'close' event, eventually.
     // But in case it doesn't:
     setTimeout(function() {
-        log.warn(`Connection didn't close.`);
+        log.info(`Connection didn't close.`);
         process.exit(3);
-    }, 10000);
+    }, 5000);
 }
 
 /** A Transform that simply passes data but not 'end'.
@@ -187,37 +222,6 @@ class DataTo extends Stream.Transform {
         // But don't molest the target.
     }
 }
-
-/** A Transform that optionally copies data into a second stream
-    (in addition to pushing it).
- */
-class Tap extends Stream.Transform {
-    constructor() {
-        super({
-            defaultEncoding: charset,
-            readableHighWaterMark: 128,
-            writableHighWaterMark: SeveralPackets,
-        });
-    }
-    _transform(chunk, encoding, callback) {
-        this.push(chunk, encoding);
-        if (this.copyTo) {
-            this.copyTo.write(chunk, encoding, callback);
-        } else if (callback) {
-            callback();
-        }
-    }
-    _flush(callback) {
-        log.debug('Tap._flush');
-        if (this.copyTo) {
-            this.copyTo.end(undefined, undefined, callback);
-        } else if (callback) {
-            callback();
-        }
-    }
-}
-const tap = new Tap();
-tap.pipe(process.stdout);
 
 /** A Transform that changes remoteEOL to OS.EOL, and
     optionally copies the original data into a second stream.
@@ -258,6 +262,62 @@ class Receiver extends Stream.Transform {
 }
 const receiver = new Receiver();
 
+/** If the input stream is a TTY, set raw mode and echo input.
+    Emit events when input contains INT or TERM.
+*/
+class Breaker extends Stream.Transform {
+    constructor(INT, TERM) {
+        super({
+            defaultEncoding: 'utf-8',
+            readableHighWaterMark: 128,
+            writableHighWaterMark: 128,
+        });
+        this.active = (INT || TERM);
+        if (this.active) {
+            this.INT = INT ? INT.charAt(0) : null;
+            this.TERM = TERM ? TERM.charAt(0) : null;
+            this.pattern = new RegExp(`[${INT}${TERM}]`, 'g');
+        }
+        const that = this;
+        this.on('pipe', function(from) {
+            that.isRaw = false;
+            try {
+                if (from.isTTY) {
+                    from.setRawMode(true);
+                    that.isRaw = true;
+                }
+            } catch(err) {
+                that.log.warn(err);
+            }
+        });
+    }
+    emitSignals(chunk) {
+        const that = this;
+        return chunk.replace(that.pattern, function(match) {
+            if (match == INT) that.emit('SIGINT');
+            else if (match == TERM) that.emit('SIGTERM');
+            return '';
+        });
+    }
+    _transform(chunk, encoding, callback) {
+        log.trace('Breaker._transform(%j)', chunk);
+        var result = chunk;
+        if (this.active) {
+            if (Buffer.isBuffer(chunk)) {
+                if (chunk.includes(this.INT) || chunk.includes(this.TERM)) {
+                    result = Buffer.from(this.emitSignals(chunk.toString('binary')), 'binary');
+                }
+            } else {
+                if (chunk.match(this.pattern)) {
+                    result = this.emitSignals(chunk)
+                }
+            }
+        }
+        this.push(result, encoding);
+        if (callback) callback();
+    }
+} // Breaker
+
 /** Handle input from stdin. When conversing, pipe it (to a connection).
     Otherwise interpret it as commands. We trust that conversation data
     may come fast (e.g. from copy-n-paste), but command data come slowly
@@ -266,7 +326,7 @@ const receiver = new Receiver();
     control via write to stdout.
 */
 class Interpreter extends Stream.Transform {
-    constructor(stdout) {
+    constructor(terminal) {
         super({
             emitClose: false,
             defaultEncoding: charset,
@@ -275,36 +335,18 @@ class Interpreter extends Stream.Transform {
         });
         const that = this;
         this.log = log;
-        this.stdout = stdout;
+        this.terminal = terminal;
         this.isConversing = true;
         this.exBuf = [];
         this.inBuf = '';
         this.cursor = 0;
         this.on('pipe', function(from) {
-            that.raw = false;
-            try {
-                if (from.isTTY) {
-                    from.setRawMode(true);
-                    that.raw = true;
-                }
-            } catch(err) {
-                that.log.warn(err);
-            }
+            that.isRaw = from.isRaw;
         });
-        if (!this.isConversing) {
-            this.stdout.write(prompt);
-        }
+        if (!this.isConversing) this.outputData(prompt);
     }
     _transform(chunk, encoding, callback) {
         var data = chunk.toString(charset);
-        if (TERM && data.indexOf(TERM) >= 0) {
-            this.emit('SIGTERM');
-            data = data.replace(allTERMs, '')
-        }
-        if (INT && data.indexOf(INT) >= 0) {
-            this.emit('SIGINT');
-            data = data.replace(allINTs, '');
-        }
         for (var brk; brk = data.match(inputBreak); ) {
             var end = brk.index + brk[0].length;
             if (data.substring(brk.index, brk.index + 2) == '\r\n') {
@@ -321,7 +363,7 @@ class Interpreter extends Stream.Transform {
     _flush(callback) {
         const that = this;
         this.log.debug('Interpreter._flush');
-        // this.exBuf.push(function() {that.stdout.end();});
+        // this.exBuf.push(function() {that.terminal.end();});
         this.flushExBuf(callback);
     }
     flushExBuf(callback) {
@@ -335,30 +377,29 @@ class Interpreter extends Stream.Transform {
             }
         }
     }
-    output(data) {
+    outputData(data) {
         if (this.isConversing) {
             this.push(data, charset);
         } else {
-            this.stdout.write(data, charset);
+            this.terminal.write(data);
         }
     }
-    outputLine(line, encoding, callback) {
-        this.stdout.write((line != null ? line : '') + OS.EOL,
-                          encoding || charset, callback);
+    outputLine(line) {
+        this.terminal.write((line != null ? line : '') + OS.EOL);
     }
     parseInput(data) {
         this.log.trace('parseInput(%j)', data);
         this.inBuf += data;
         if (EOT) {
             const eot = this.inBuf.indexOf(EOT);
-            if (eot == 0 && this.raw) {
+            if (eot == 0 && this.isRaw) {
                 this.log.debug('EOT raw = end of file');
                 this.inBuf = '';
                 this.end(); // end of file
             } else if (eot >= 0) { // flush partial line
                 this.log.debug('EOT');
                 if (this.isConversing) {
-                    this.output(this.inBuf.substring(0, eot));
+                    this.outputData(this.inBuf.substring(0, eot));
                     this.inBuf = this.inBuf.substring(eot + EOT.length);
                 } else {
                     this.inBuf = this.inBuf.substring(0, eot)
@@ -381,13 +422,13 @@ class Interpreter extends Stream.Transform {
             case '\r':
                 this.foundCR = (brk == '\r');
                 var line = this.inBuf.substring(0, end);
-                if (this.raw) {
+                if (this.isRaw) {
                     var echo = (line + OS.EOL).substring(this.cursor);
                     this.log.trace('echo %j', echo);
-                    this.stdout.write(echo);
+                    this.terminal.write(echo);
                 }
                 if (this.isConversing) {
-                    this.output(line + remoteEOL);
+                    this.outputData(line + remoteEOL);
                 } else {
                     this.executeCommand(line);
                 }
@@ -397,16 +438,13 @@ class Interpreter extends Stream.Transform {
             default: // ESC
                 this.log.debug('ESC %j', brk);
                 if (this.isConversing) {
-                    this.output(this.inBuf.substring(0, end));
+                    this.outputData(this.inBuf.substring(0, end));
                     this.inBuf = this.inBuf.substring(end + brk.length);
                     this.isConversing = false;
                     this.cursor = 0;
-                    if (verbose) {
-                        this.output(OS.EOL + `(Pausing conversation with ${remoteAddress}.)` +
-                                    OS.EOL + prompt);
-                    } else {
-                        this.output(OS.EOL + prompt);
-                    }
+                    this.outputLine(OS.EOL + (
+                        verbose ? `(Pausing conversation with ${remoteAddress}.)` : ''));
+                    this.outputData(prompt);
                 } else { // already in command mode
                     // Ignore the ESC:
                     this.inBuf = this.inBuf.substring(0, end)
@@ -414,7 +452,7 @@ class Interpreter extends Stream.Transform {
                 }
             }
         }
-        if (this.raw) {
+        if (this.isRaw) {
             while (this.inBuf.endsWith(BS) || this.inBuf.endsWith(DEL)) {
                 this.inBuf = this.inBuf.substring(0, this.inBuf.length - BS.length - 1);
             }
@@ -426,15 +464,15 @@ class Interpreter extends Stream.Transform {
                 echo += this.inBuf.substring(this.cursor);
                 this.cursor = this.inBuf.length;
             }
-            if (echo) this.stdout.write(echo);
+            if (echo) this.terminal.write(echo);
         }
     } // parseInput
     executeCommand(line) {
         const that = this;
         try {
             this.log.debug('executeCommand(%j)', line);
-            if (!this.raw) {
-                this.stdout.write(line + OS.EOL);
+            if (!this.isRaw) {
+                this.terminal.write(line + OS.EOL);
             }
             const parts = line.trim().split(/\s+/);
             switch (parts[0].toLowerCase()) {
@@ -471,7 +509,7 @@ class Interpreter extends Stream.Transform {
                     }
                     this.outputLine(`Wait for ${secs} seconds ...`);
                     setTimeout(function(that) {
-                        that.stdout.write(prompt);
+                        that.outputData(OS.EOL + prompt);
                         that.isWaiting = false;
                         that.flushExBuf();
                     }, secs * 1000, this);
@@ -481,9 +519,9 @@ class Interpreter extends Stream.Transform {
                 this.isWaiting = true;
                 return; // no prompt
             case 'x':
-                this.stdout.write(prompt); // first, then:
+                this.outputData(prompt); // first, then:
                 this.execute(parts[1]);
-                return; // Don't prompt again.
+                return; // no prompt
             case '?':
             case 'h': // show all available commands
                 this.outputLine([
@@ -504,15 +542,12 @@ class Interpreter extends Stream.Transform {
                     '',].join(OS.EOL));
                 break;
             default:
-                this.outputLine([
-                    `${line}?`,
-                    `Type H to see a list of commands.`,
-                ].join(OS.EOL));
+                this.outputLine(`${line}?${OS.EOL}Type H to see a list of commands.`);
             }
         } catch(err) {
             this.log.warn(err);
         }
-        this.stdout.write(prompt);
+        this.outputData(prompt);
     } // executeCommand
 
     receiveFile(path) {
@@ -524,12 +559,12 @@ class Interpreter extends Stream.Transform {
         if (path) {
             const toFile = fs.createWriteStream(path, {encoding: charset});
             toFile.on('error', function(err) {
-                that.outputLine(`${err}`);
+                log.warn(err);
             });
             toFile.on('close', function() {
                 const bytes = toFile.bytesWritten;
                 that.outputLine(OS.EOL + `Received ${bytes} bytes from ${remoteAddress}.`);
-                if (!that.isConversing) that.stdout.write(prompt);
+                if (!that.isConversing) that.outputData(prompt);
                 delete receiver.copyTo;
             });
             receiver.copyTo = toFile;
@@ -549,14 +584,14 @@ class Interpreter extends Stream.Transform {
                 highWaterMark: SeveralPackets,
             });
             this.fromFile.on('error', function(err) {
-                that.outputLine(`${err}`);
+                log.warn(err);
             });
             this.fromFile.on('close', function() {
                 const bytes = that.fromFile.bytesRead;
                 // Often, most of the bytes haven't been transmitted yet.
                 // So it's more accurate to say 'sending' instead of 'sent'.
                 that.outputLine(OS.EOL + `Sending ${bytes} bytes to ${remoteAddress}.`);
-                if (!that.isConversing) that.stdout.write(prompt);
+                if (!that.isConversing) that.outputData(prompt);
                 delete that.fromFile;
             });
             this.outputLine(`Sending to ${remoteAddress} from ${path}.`);
@@ -566,22 +601,22 @@ class Interpreter extends Stream.Transform {
 
     transcribe(path) {
         const that = this;
-        if (tap.copyTo) {
-            tap.copyTo.end();
-            delete tap.copyTo;
+        if (terminal.copyTo) {
+            terminal.copyTo.end();
+            delete terminal.copyTo;
         }
         if (path) {
             const copyTo = fs.createWriteStream(path, {encoding: charset});
             copyTo.on('error', function(err) {
-                that.outputLine(`${err}`);
+                log.warn(err);
             });
             copyTo.on('close', function() {
                 const bytes = copyTo.bytesWritten;
                 that.outputLine(OS.EOL + `Transcribed ${bytes} bytes into ${path}.`);
-                if (!that.isConversing) that.stdout.write(prompt);
-                delete tap.copyTo;
+                if (!that.isConversing) that.outputData(prompt);
+                delete terminal.copyTo;
             });
-            tap.copyTo = copyTo;
+            terminal.copyTo = copyTo;
             this.outputLine(`Transcribing into ${path}...`);
         }
     }
@@ -591,7 +626,7 @@ class Interpreter extends Stream.Transform {
         if (path) {
             const source = fs.createReadStream(path, {encoding: charset});
             source.on('error', function(err) {
-                that.outputLine(`${err}`);
+                log.warn(err);
             });
             source.pipe(new DataTo(this));
         }
@@ -599,9 +634,15 @@ class Interpreter extends Stream.Transform {
 
 } // Interpreter
 
-const interpreter = new Interpreter(tap);
+const breaker = new Breaker(INT, TERM);
+process.stdin.pipe(breaker);
+// At this point, the user can type INT or TERM to generate events,
+// but other input is simply buffered, not even echoed.
+
+const interpreter = new Interpreter(terminal);
 var connection = null;
 try {
+    if (verbose) terminal.write('Connecting ...' + OS.EOL);
     connection = AGWPE.createConnection({
         host: host,
         port: port,
@@ -613,7 +654,7 @@ try {
         frameLength: frameLength,
         logger: agwLogger,
     }, function connectListener(info) {
-        process.stdin.pipe(interpreter).pipe(connection);
+        breaker.pipe(interpreter).pipe(connection);
         interpreter.outputLine(messageFromAGW(info) || `Connected to ${remoteAddress}`);
         if (ESC) {
             interpreter.outputLine(`(Type ${controlify(ESC)} to pause the conversation.)`
@@ -621,12 +662,12 @@ try {
         }
     });
 } catch(err) {
-    console.warn(err);
+    log.warn(err);
     showUsage(4);
 }
 connection.on('end', function(info) {
     log.debug('Connection emitted end(%j)', info || '')
-    interpreter.outputLine(messageFromAGW(info) || `Disconnected from ${remoteAddress}`)
+    terminal.write((messageFromAGW(info) || `Disconnected from ${remoteAddress}`) + OS.EOL);
 });
 connection.on('close', function(info) {
     log.debug('Connection emitted close(%s)', info || '')
@@ -634,11 +675,11 @@ connection.on('close', function(info) {
 });
 ['error', 'timeout'].forEach(function(event) {
     connection.on(event, function(err) {
-        console.warn('Connection %s %s', event, err || '');
+        terminal.write(`Connection ${event} ${err||''}${OS.EOL}`);
     });
 });
 
-connection.pipe(receiver).pipe(new DataTo(tap));
+connection.pipe(receiver).pipe(new DataTo(terminal));
 ['end', 'close'].forEach(function(event) {
     receiver.on(event, function(info) {
         log.debug('receiver emitted %s(%s)', event, info || '');
@@ -661,7 +702,7 @@ connection.pipe(receiver).pipe(new DataTo(tap));
         log.debug('process received %s(%s)', signal, info || '');
         disconnectGracefully(signal);
     });
-    interpreter.on(signal, function(info) {
+    breaker.on(signal, function(info) {
         log.debug('interpreter emitted %s(%s)', signal, info || '');
         disconnectGracefully(signal);
     });
@@ -670,7 +711,7 @@ process.on('SIGTERM', function(info) {
     log.debug('process received SIGTERM(%s)', info || '');
     setTimeout(process.exit, 10);
 });
-interpreter.on('SIGTERM', function(info) {
+breaker.on('SIGTERM', function(info) {
     log.debug('interpreter emitted SIGTERM(%s)', info || '');
     setTimeout(process.exit, 10);
 });
@@ -685,7 +726,7 @@ connection.on('frameReceived', function(frame) {
             const portCount = parseInt(parts[0]);
             if (localPort >= portCount) {
                 const message = `The TNC has no port ${localPort}.`;
-                const lines = [];
+                const lines = []; // a blank line
                 if (portCount <= 0) {
                     lines.push(message);
                 } else {
@@ -697,7 +738,7 @@ connection.on('frameReceived', function(frame) {
                         lines.push(p + ': ' + description);
                     }
                 }
-                interpreter.outputLine(lines.join(OS.EOL) + OS.EOL);
+                terminal.write(lines.join(OS.EOL) + OS.EOL + OS.EOL);
                 connection.destroy();
             }
             break;
