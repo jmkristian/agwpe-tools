@@ -12,12 +12,6 @@ const OS = require('os');
 const path = require('path');
 const Stream = require('stream');
 
-[ // Close abruptly when bad signals happen:
-    'SIGBUS', 'SIGFPE', 'SIGSEGV', 'SIGILL',
-].forEach(function(signal) {
-    process.on(signal, process.exit); // immediately
-});
-
 function newError(message, code) {
     const err = new Error(message);
     if (code) err.code = code;
