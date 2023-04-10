@@ -43,7 +43,7 @@ To get started:
 2. Start a shell and `cd` into your clone.
 3. Check whether node.js is installed, by running the command `node --version`.
    If not, [install node.js](https://nodejs.org/en/download/).
-   You'll need node version 8.0 or later.
+   You'll need node version 8.17 or later.
    If you need to upgrade, you can use `nvm` to
    [install a new version](https://heynode.com/tutorial/install-nodejs-locally-nvm/).
 4. Download node modules, by running the command `npm install`.
@@ -53,11 +53,11 @@ To get started:
 
 To see a summary of the command line options, run `node ./converse.js` (with no arguments).
 
-The converse.js software requires node.js version 8 or later.
+The converse.js software requires node.js version 8.17 or later.
 It works on Windows 8 and Ubuntu 20, with
 [Direwolf](https://github.com/wb2osz/direwolf) version 1.7
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions or on Mac.
 
 The converse.exe program for Windows was built by `build.sh`,
-running on node.js version 18.15.0.
+running on node.js version 12.22.12.
