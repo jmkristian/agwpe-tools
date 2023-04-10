@@ -26,24 +26,11 @@ To get started:
 To see a summary of the command line options, run `.\converse.exe` (with no arguments).
 
 To communicate large amounts of text,
-it's convenient to copy-n-paste to or from your command line window.
-I recommend enabling
-[QuickEdit Mode](https://www.techjunkie.com/boost-productivity-quickedit-mode-windows-command-prompt/).
-To copy all the data, be sure to select the complete width of the screen buffer.
-To handle long lines of text, I recommend increasing the width of the screen buffer and window
-(in the Layout tab of the Properties dialog).
+you can copy-n-paste to or from your command line window.
+To copy all the text from a command line window,
+be sure to select the complete width of the screen buffer.
 
-You can create a small .cmd script to run converse.exe with your favorite arguments, like this:
-```
-@.\converse.exe w6jmk w1xsc-1
-@pause
-```
-The
-[pause](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/pause)
-command prevents the window from closing immediately after disconnecting from the remote station.
-You can create a
-[shortcut](https://www.computerhope.com/issues/ch000739.htm)
-to the .cmd script, to customize the properties of the command line window.
+For an example of customizing converse.exe, see [Polling a BBS](BBS_polling.md).
 
 ### Linux
 

@@ -3,3 +3,5 @@
 
 # Files that are truly binary and should not be modified.
 *.exe binary
+*.gif binary
+*.jpg binary
