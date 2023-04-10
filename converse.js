@@ -58,11 +58,12 @@ const remoteEOL = fromASCII(args.eol) || '\r';
 const verbose = args.verbose || args.v;
 const via = args.via;
 
-const ESC = (args.escape != null) ? fromASCII(args.escape) : '\x1D'; // GS = Ctrl+]
-const TERM = (args.kill != null) ? fromASCII(args.kill) : '\x1C'; // FS = Windows Ctrl+Break
+const ESC = (args.escape == undefined) ? '\x1D' // GS = Ctrl+]
+    : fromASCII(args.escape);
+const TERM = (args.kill == undefined) ? '\x1C' // FS = Windows Ctrl+Break
+      : fromASCII(args.kill);
 
-const SeveralPackets = 2048; // The number of bytes in several AX.25 packets.
-// Packets are rarely longer than 256 bytes.
+const SeveralFrames = 4 * frameLength; // The number of bytes in several frames.
 
 const BS = '\x08'; // un-type previous character
 const DEL = '\x7F'; // un-type previous character
@@ -72,7 +73,7 @@ const prompt = 'cmd:';
 
 const allNULs = new RegExp('\0', 'g');
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
-const inputBreak = new RegExp('\r|\n|' + EOT + (ESC ? '|' + ESC : ''));
+const inputBreak = new RegExp('\r|\n|' + EOT + (ESC ? ('|' + ESC) : ''));
 
 const logStream = bunyanFormat({outputMode: 'short', color: false}, process.stderr);
 const log = Bunyan.createLogger({
@@ -272,11 +273,12 @@ class Breaker extends Stream.Transform {
             readableHighWaterMark: 128,
             writableHighWaterMark: 128,
         });
-        this.active = (INT || TERM);
-        if (this.active) {
-            this.INT = INT ? INT.charAt(0) : null;
-            this.TERM = TERM ? TERM.charAt(0) : null;
+        this.INT = INT;
+        this.TERM = TERM;
+        if (INT || TERM) {
             this.pattern = new RegExp(`[${INT}${TERM}]`, 'g');
+            this.INTcode = INT ? INT.charCodeAt(0) : null;
+            this.TERMcode = TERM ? TERM.charCodeAt(0) : null;
         }
         const that = this;
         this.on('pipe', function(from) {
@@ -294,17 +296,18 @@ class Breaker extends Stream.Transform {
     emitSignals(chunk) {
         const that = this;
         return chunk.replace(that.pattern, function(match) {
-            if (match == INT) that.emit('SIGINT');
-            else if (match == TERM) that.emit('SIGTERM');
+            if (match == that.INT) that.emit('SIGINT');
+            else if (match == that.TERM) that.emit('SIGTERM');
             return '';
         });
     }
     _transform(chunk, encoding, callback) {
         log.trace('Breaker._transform(%j)', chunk);
         var result = chunk;
-        if (this.active) {
+        if (this.pattern) {
             if (Buffer.isBuffer(chunk)) {
-                if (chunk.includes(this.INT) || chunk.includes(this.TERM)) {
+                if ((this.INT && chunk.includes(this.INTcode)) ||
+                    (this.TERM && chunk.includes(this.TERMcode))) {
                     result = Buffer.from(this.emitSignals(chunk.toString('binary')), 'binary');
                 }
             } else {
@@ -326,16 +329,17 @@ class Breaker extends Stream.Transform {
     control via write to stdout.
 */
 class Interpreter extends Stream.Transform {
-    constructor(terminal) {
+    constructor(terminal, encoding) {
         super({
             emitClose: false,
-            defaultEncoding: charset,
-            readableHighWaterMark: SeveralPackets,
-            writableHighWaterMark: SeveralPackets,
+            defaultEncoding: encoding,
+            readableHighWaterMark: SeveralFrames,
+            writableHighWaterMark: SeveralFrames,
         });
         const that = this;
         this.log = log;
         this.terminal = terminal;
+        this.encoding = encoding;
         this.isConversing = true;
         this.exBuf = [];
         this.inBuf = '';
@@ -346,24 +350,10 @@ class Interpreter extends Stream.Transform {
         if (!this.isConversing) this.outputData(prompt);
     }
     _transform(chunk, encoding, callback) {
-        var data = chunk.toString(charset);
-        for (var brk; brk = data.match(inputBreak); ) {
-            var end = brk.index + brk[0].length;
-            if (data.substring(brk.index, brk.index + 2) == '\r\n') {
-                end = brk.index + 2;
-            }
-            var piece = data.substring(0, end);
-            this.log.debug('input break %j', piece);
-            this.exBuf.push(piece);
-            data = data.substring(end);
-        }
-        this.exBuf.push(data);
+        this.exBuf.push(chunk);
         this.flushExBuf(callback);
     }
     _flush(callback) {
-        const that = this;
-        this.log.debug('Interpreter._flush');
-        // this.exBuf.push(function() {that.terminal.end();});
         this.flushExBuf(callback);
     }
     flushExBuf(callback) {
@@ -379,7 +369,7 @@ class Interpreter extends Stream.Transform {
     }
     outputData(data) {
         if (this.isConversing) {
-            this.push(data, charset);
+            this.push(data, this.encoding);
         } else {
             this.terminal.write(data);
         }
@@ -387,9 +377,9 @@ class Interpreter extends Stream.Transform {
     outputLine(line) {
         this.terminal.write((line != null ? line : '') + OS.EOL);
     }
-    parseInput(data) {
-        this.log.trace('parseInput(%j)', data);
-        this.inBuf += data;
+    parseInput(chunk) {
+        this.log.trace('parseInput(%j)', chunk);
+        this.inBuf += chunk.toString(this.encoding);
         if (EOT) {
             const eot = this.inBuf.indexOf(EOT);
             if (eot == 0 && this.isRaw) {
@@ -557,7 +547,7 @@ class Interpreter extends Stream.Transform {
             delete receiver.copyTo;
         }
         if (path) {
-            const toFile = fs.createWriteStream(path, {encoding: charset});
+            const toFile = fs.createWriteStream(path, {encoding: 'binary'});
             toFile.on('error', function(err) {
                 log.warn(err);
             });
@@ -581,7 +571,7 @@ class Interpreter extends Stream.Transform {
         if (path) {
             this.fromFile = fs.createReadStream(path, {
                 encoding: 'binary',
-                highWaterMark: SeveralPackets,
+                highWaterMark: SeveralFrames,
             });
             this.fromFile.on('error', function(err) {
                 log.warn(err);
@@ -601,30 +591,30 @@ class Interpreter extends Stream.Transform {
 
     transcribe(path) {
         const that = this;
-        if (terminal.copyTo) {
-            terminal.copyTo.end();
-            delete terminal.copyTo;
+        if (this.terminal.copyTo) {
+            this.terminal.copyTo.end();
+            delete this.terminal.copyTo;
         }
         if (path) {
-            const copyTo = fs.createWriteStream(path, {encoding: charset});
-            copyTo.on('error', function(err) {
+            const toFile = fs.createWriteStream(path, {encoding: this.encoding});
+            toFile.on('error', function(err) {
                 log.warn(err);
             });
-            copyTo.on('close', function() {
-                const bytes = copyTo.bytesWritten;
+            toFile.on('close', function() {
+                const bytes = toFile.bytesWritten;
                 that.outputLine(OS.EOL + `Transcribed ${bytes} bytes into ${path}.`);
                 if (!that.isConversing) that.outputData(prompt);
-                delete terminal.copyTo;
+                delete that.terminal.copyTo;
             });
-            terminal.copyTo = copyTo;
             this.outputLine(`Transcribing into ${path}...`);
+            this.terminal.copyTo = toFile;
         }
     }
 
     execute(path) {
         const that = this;
         if (path) {
-            const source = fs.createReadStream(path, {encoding: charset});
+            const source = fs.createReadStream(path, {encoding: this.encoding});
             source.on('error', function(err) {
                 log.warn(err);
             });
@@ -639,7 +629,7 @@ process.stdin.pipe(breaker);
 // At this point, the user can type INT or TERM to generate events,
 // but other input is simply buffered, not even echoed.
 
-const interpreter = new Interpreter(terminal);
+const interpreter = new Interpreter(terminal, charset);
 var connection = null;
 try {
     if (verbose) terminal.write('Connecting ...' + OS.EOL);
