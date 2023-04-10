@@ -8,7 +8,7 @@ opens a window and connects to the BBS.
 I use [QuickEdit](https://www.techjunkie.com/boost-productivity-quickedit-mode-windows-command-prompt/)
 to send messages and save downloaded messages in files.
 After I disconnect from the BBS,
-I can press Enter to connect again or close the window.
+I can close the window, or press Enter to connect again.
 Here's [a demonstration](https://youtu.be/FF3VRsufewo).
 
 Here's how I made this.
