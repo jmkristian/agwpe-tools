@@ -8,8 +8,9 @@ using an AGWPE-compatible TNC (e.g.
 ### Windows
 
 This package provides a Windows program `converse.exe`,
-which you can use to interact with another station.
-It runs in a command line window.
+which you can use to interact with another station
+via an AX.25 connection.
+The program runs in a command line window.
 You can watch a [demonstration video](https://youtu.be/lRvlnEeBrow/).
 
 To get started:
@@ -30,7 +31,8 @@ you can copy-n-paste to or from your command line window.
 To copy all the text from a command line window,
 be sure to select the complete width of the screen buffer.
 
-For an example of customizing converse.exe, see [Polling a BBS](BBS_polling.md).
+You can customize converse.exe.
+For example, see [Polling a BBS](BBS_polling.md).
 
 ### Linux
 
@@ -41,14 +43,15 @@ To get started:
 1. [Clone](https://www.techrepublic.com/article/how-to-clone-github-repository/)
    the [agwpe-tools](https://github.com/jmkristian/agwpe-tools) repository.
 2. Start a shell and `cd` into your clone.
-3. Check whether node.js is installed, by running the command `node --version`.
-   If not, [install node.js](https://nodejs.org/en/download/).
-   You'll need node version 8.17 or later.
-   If you need to upgrade, you can use `nvm` to
+3. Get node.js version 8.17 or later.
+   Check your current version by running the command `node --version`.
+   If you don't have this command, [install node.js](https://nodejs.org/en/download/)
+   and start a new shell.
+   If you have an old version, you can use `nvm` to
    [install a new version](https://heynode.com/tutorial/install-nodejs-locally-nvm/).
 4. Download node modules, by running the command `npm install`.
    Ignore messages about finding Python; they're harmless.
-5. Start your TNC (e.g. Direwolf or SoundModem).
+5. Start your TNC (e.g. Direwolf).
 6. Run the command `node ./converse.js <your call sign> <remote call sign> --verbose`.
 
 To see a summary of the command line options, run `node ./converse.js` (with no arguments).
