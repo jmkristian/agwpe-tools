@@ -458,9 +458,11 @@ class Interpreter extends Stream.Transform {
             if (!this.isRaw) {
                 this.terminal.write(line + OS.EOL);
             }
-            const parts = line.trim().split(/\s+/);
-            switch (parts[0].toLowerCase()) {
-            case '':
+            const found = line.trim().match(/([^\s]+)\s*(.*)/);
+            const verb = found ? found[1].toLowerCase() : '';
+            const arg = found && found[2];
+            switch (verb) {
+            case '': // do nothing
                 break;
             case 'b': // disconnect
                 connection.end();
@@ -476,19 +478,19 @@ class Interpreter extends Stream.Transform {
                 this.isConversing = true;
                 return; // no prompt
             case 'r': // receive a file
-                this.receiveFile(parts[1]);
+                this.receiveFile(arg);
                 break;
             case 's': // send a file
-                this.sendFile(parts[1]);
+                this.sendFile(arg);
                 break;
             case 't':
-                this.transcribe(parts[1]);
+                this.transcribe(arg);
                 break;
             case 'w': // wait
-                if (parts[1]) {
-                    const secs = parseInt(parts[1]);
+                if (arg) {
+                    const secs = parseInt(arg);
                     if (isNaN(secs)) {
-                        throw newError(`${parts[1]} isn't an integer.`,
+                        throw newError(`${arg} isn't an integer.`,
                                        'ERR_INVALID_ARG_VALUE');
                     }
                     this.outputLine(`Wait for ${secs} seconds ...`);
@@ -504,7 +506,7 @@ class Interpreter extends Stream.Transform {
                 return; // no prompt
             case 'x':
                 this.outputData(prompt); // first, then:
-                this.execute(parts[1]);
+                this.execute(arg);
                 return; // no prompt
             case '?':
             case 'h': // show all available commands
