@@ -3,6 +3,7 @@
     line from stdin is transmitted, and received data are written to
     stdout. A simple command mode enables sending and receiving files.
  */
+"use strict";
 const AGWPE = require('@jmkristian/node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
@@ -11,6 +12,7 @@ const minimist = require('minimist');
 const OS = require('os');
 const path = require('path');
 const Stream = require('stream');
+const util = require('util');
 
 function newError(message, code) {
     const err = new Error(message);
@@ -29,6 +31,7 @@ function fromASCII(s) {
     case 'EOT': return '\x04';
     case 'CR': return '\r';
     case 'LF': return '\n';
+    case 'CR LF': return '\r\n';
     case 'CRLF': return '\r\n';
     case 'FS': return '\x1C';
     case 'GS': return '\x1D';
@@ -41,8 +44,9 @@ const args = minimist(process.argv.slice(2), {
     'string': ['via'],
 });
 const localAddress = args._[0];
+const localEncoding = 'utf8';
 const remoteAddress = args._[1];
-const charset = (args.encoding || 'UTF-8').toLowerCase();
+const remoteEncoding = (args.encoding || 'UTF-8').toLowerCase();
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const ID = args.ID || args.id;
@@ -89,8 +93,12 @@ const agwLogger = Bunyan.createLogger({
 log.debug('%j', {
     localPort: localPort,
     localAddress: localAddress,
+    localEncoding: localEncoding,
     remoteAddress: remoteAddress,
+    remoteEncoding: remoteEncoding,
+    EOL: remoteEOL,
     ESC: ESC,
+    INT: INT,
     TERM: TERM,
 });
 
@@ -120,7 +128,8 @@ function controlify(from) {
 class Tee extends Stream.Transform {
     constructor() {
         super({
-            defaultEncoding: charset,
+            decodeStrings: false, // Don't convert strings to bytes
+            encoding: null, // Don't convert bytes to strings
             // Don't buffer very much data. The writer will
             // handle flow control if the reader is slow.
             readableHighWaterMark: 256,
@@ -136,7 +145,7 @@ class Tee extends Stream.Transform {
         }
     }
     _flush(callback) {
-        log.debug('Tee._flush');
+        log.trace('Tee._flush');
         if (this.copyTo) {
             this.copyTo.end(undefined, undefined, callback);
         } else if (callback) {
@@ -159,7 +168,7 @@ function showUsage(exitCode) {
         `--tnc-port N: TNC port (sound card number). range 0-255. default: 0`,
         `--via <digis>: A comma-separated list of digipeater call signs.`,
         `--ID <string>: identifies this station, e.g. when the local call sign is tactical.`,
-        `--encoding <string>: encoding of characters to and from bytes. default: UTF-8`,
+        `--encoding <string>: encoding of characters exchanged with the remote station. default: UTF-8`,
         `--eol <string>: represents end-of-line to the remote station. default: CR`,
         `--escape <character>: switch from conversation to command mode. default: Ctrl+]`,
         `--frame-length N: maximum number of bytes per frame transmitted to the TNC. default: 128`,
@@ -169,14 +178,15 @@ function showUsage(exitCode) {
     if (exitCode != null) process.exit(exitCode);
 }
 
-if (ESC && ESC.length > 1) {
-    terminal.write(`The escape value must be a single character (not ${controlify(ESC)}).${OS.EOL}`)
-    showUsage(1);
+function assertOneCharacter(value, name, err) {
+    if (value && value.length > 1) {
+        terminal.write(`The ${name} value must be a single character (not ${controlify(value)}).${OS.EOL}`)
+        showUsage(err);
+    }
 }
-if (TERM && TERM.length > 1) {
-    terminal.write(`The kill value must be a single character (not ${controlify(TERM)}).${OS.EOL}`)
-    showUsage(2);
-}
+assertOneCharacter(ESC, 'escape', 1);
+assertOneCharacter(INT, 'interrupt', 3);
+assertOneCharacter(TERM, 'kill', 2);
 
 function messageFromAGW(info) {
     return info && info.toString('latin1')
@@ -196,16 +206,50 @@ function disconnectGracefully(signal) {
     }, 5000);
 }
 
+function hexByte(from) {
+    return ((from >> 4) & 0x0F).toString(16) + (from & 0x0F).toString(16)
+}
+
+function hexBuffer(buffer) {
+    var hex = '';
+    for (var f = 0; f < buffer.length; ++f) {
+        if (hex) hex += ' ';
+        hex += hexByte(buffer[f]);
+    }
+    return hex;
+}
+
+function formatChunk(chunk, encoding) {
+    if (Buffer.isBuffer(chunk)) {
+        return hexBuffer(chunk);
+    } else {
+        return util.format('%s %j', encoding, chunk);
+    }
+}
+
+function logChunk(level, format, chunk, encoding) {
+    if (level.apply(log, [])) {
+        level.apply(log, [format, formatChunk(chunk, encoding)]);
+    }
+}
+
 /** A Transform that simply passes data but not 'end'.
     This is used to pipe multiple streams into one.
  */
 class DataTo extends Stream.Transform {
-    constructor(target) {
-        super({defaultEncoding: charset});
+    constructor(target, logFormat) {
+        super({
+            decodeStrings: false, // Don't convert strings to bytes
+            encoding: null, // Don't convert bytes to strings
+        });
         this.target = target;
+        this.logFormat = logFormat;
     }
     _transform(chunk, encoding, callback) {
         try {
+            if (this.logFormat) {
+                logChunk(log.debug, this.logFormat, chunk, encoding);
+            }
             this.target.write(chunk, encoding, callback);
         } catch(err) {
             log.debug(err);
@@ -224,12 +268,14 @@ class DataTo extends Stream.Transform {
 class Receiver extends Stream.Transform {
     constructor() {
         super({
+            decodeStrings: false, // Don't convert strings to bytes
             emitClose: false,
+            encoding: null, // Don't convert bytes to strings
         });
     }
     _transform(chunk, encoding, callback) {
-        const data = chunk.toString(charset);
-        log.trace('< %s', JSON.stringify(data));
+        logChunk(log.debug, '< %s', chunk, encoding);
+        var data = Buffer.isBuffer(chunk) ? chunk.toString(remoteEncoding) : chunk;
         if (this.partialEOL && data.startsWith(remoteEOL.charAt(1))) {
             data = data.substring(1);
         }
@@ -239,15 +285,17 @@ class Receiver extends Stream.Transform {
         } else {
             this.partialEOL = false;
         }
-        this.push(data.replace(allRemoteEOLs, OS.EOL), charset);
+        data = data.replace(allRemoteEOLs, OS.EOL);
+        log.trace('Receiver.push(%j, %s)', data, localEncoding);
+        this.push(data, localEncoding);
         if (this.copyTo) {
-            this.copyTo.write(chunk, encoding, callback);
+            this.copyTo.write(chunk, localEncoding, callback);
         } else if (callback) {
             callback();
         }
     }
     _flush(callback) {
-        log.debug('Receiver._flush');
+        log.trace('Receiver._flush');
         if (this.copyTo) {
             this.copyTo.end(undefined, undefined, callback);
         } else if (callback) {
@@ -257,60 +305,50 @@ class Receiver extends Stream.Transform {
 }
 const receiver = new Receiver();
 
-/** If the input stream is a TTY, set raw mode and echo input.
+/** If the input stream is a TTY, setRawMode and set this.isRaw = true.
     Emit events when input contains INT or TERM.
 */
 class Breaker extends Stream.Transform {
     constructor(INT, TERM) {
         super({
-            defaultEncoding: 'utf-8',
+            decodeStrings: false, // Don't convert strings to bytes
+            encoding: null, // Don't convert bytes to strings
             readableHighWaterMark: 128,
             writableHighWaterMark: 128,
         });
         this.INT = INT;
         this.TERM = TERM;
         if (INT || TERM) {
-            this.pattern = new RegExp(`[${INT}${TERM}]`, 'g');
-            this.INTcode = INT ? INT.charCodeAt(0) : null;
-            this.TERMcode = TERM ? TERM.charCodeAt(0) : null;
+            this.pattern = new RegExp(`${INT}|${TERM}`, 'g');
         }
         const that = this;
         this.on('pipe', function(from) {
             that.isRaw = false;
             try {
                 if (from.isTTY) {
-                    from.setRawMode(true);
-                    that.isRaw = true;
+                    if (from.setEncoding) from.setEncoding(localEncoding);
+                    if (from.setRawMode) {
+                        from.setRawMode(true);
+                        that.isRaw = true;
+                    }
                 }
             } catch(err) {
                 that.log.warn(err);
             }
         });
     }
-    emitSignals(chunk) {
-        const that = this;
-        return chunk.replace(that.pattern, function(match) {
-            if (match == that.INT) that.emit('SIGINT');
-            else if (match == that.TERM) that.emit('SIGTERM');
-            return '';
-        });
-    }
     _transform(chunk, encoding, callback) {
-        log.trace('Breaker._transform(%j)', chunk);
-        var result = chunk;
+        logChunk(log.trace, 'Breaker._transform(%s)', chunk, encoding);
+        var result = Buffer.isBuffer(chunk) ? buffer.toString(localEncoding) : chunk;
         if (this.pattern) {
-            if (Buffer.isBuffer(chunk)) {
-                if ((this.INT && chunk.includes(this.INTcode)) ||
-                    (this.TERM && chunk.includes(this.TERMcode))) {
-                    result = Buffer.from(this.emitSignals(chunk.toString('binary')), 'binary');
-                }
-            } else {
-                if (chunk.match(this.pattern)) {
-                    result = this.emitSignals(chunk)
-                }
-            }
+            const that = this;
+            result = result.replace(this.pattern, function(found) {
+                if (found == that.INT) that.emit('SIGINT');
+                else if (found == that.TERM) that.emit('SIGTERM');
+                return '';
+            });
         }
-        this.push(result, encoding);
+        this.push(result, localEncoding);
         if (callback) callback();
     }
 } // Breaker
@@ -325,8 +363,9 @@ class Breaker extends Stream.Transform {
 class Interpreter extends Stream.Transform {
     constructor(terminal, encoding) {
         super({
+            decodeStrings: false, // Don't convert strings to bytes
+            encoding: null, // Don't convert bytes to strings
             emitClose: false,
-            defaultEncoding: encoding,
             readableHighWaterMark: SeveralFrames,
             writableHighWaterMark: SeveralFrames,
         });
@@ -334,6 +373,7 @@ class Interpreter extends Stream.Transform {
         this.log = log;
         this.terminal = terminal;
         this.encoding = encoding;
+        this.setDefaultEncoding(encoding);
         this.isConversing = true;
         this.exBuf = [];
         this.inBuf = '';
@@ -344,6 +384,7 @@ class Interpreter extends Stream.Transform {
         if (!this.isConversing) this.outputData(prompt);
     }
     _transform(chunk, encoding, callback) {
+        logChunk(log.trace, 'Interpreter._transform(%s)', chunk, encoding);
         this.exBuf.push(chunk);
         this.flushExBuf(callback);
     }
@@ -357,13 +398,15 @@ class Interpreter extends Stream.Transform {
             if ((typeof item) == 'function') {
                 item(); // callback
             } else if (item) {
-                this.parseInput(item);
+                this.parseInput(Buffer.isBuffer(item) ? item.toString(localEncoding) : item);
             }
         }
     }
     outputData(data) {
         if (this.isConversing) {
-            this.push(data, this.encoding);
+            const chunk = Buffer.from(data, remoteEncoding);
+            logChunk(log.debug, '> %s', chunk);
+            this.push(chunk);
         } else {
             this.terminal.write(data);
         }
@@ -372,7 +415,7 @@ class Interpreter extends Stream.Transform {
         this.terminal.write((line != null ? line : '') + OS.EOL);
     }
     parseInput(chunk) {
-        this.log.trace('parseInput(%j)', chunk);
+        logChunk(log.trace, 'Interpreter.parseInput(%s)', chunk, this.encoding);
         this.inBuf += chunk.toString(this.encoding);
         if (EOT) {
             const eot = this.inBuf.indexOf(EOT);
@@ -408,7 +451,7 @@ class Interpreter extends Stream.Transform {
                 var line = this.inBuf.substring(0, end);
                 if (this.isRaw) {
                     var echo = (line + OS.EOL).substring(this.cursor);
-                    this.log.trace('echo %j', echo);
+                    this.log.trace('Interpreter echo %j', echo);
                     this.terminal.write(echo);
                 }
                 if (this.isConversing) {
@@ -520,7 +563,7 @@ class Interpreter extends Stream.Transform {
                     '  If no file name is given, stop sending from the file.',
                     'T [file name]: save a copy of all output to a file.',
                     '  If no file name is given, stop saving the output.',
-                    'X <file name>: take input from a file.',
+                    'X [file name]: take input from a file.',
                     'W [N]: wait for N seconds.',
                     '  If N is not given, wait until disconnected.',
                     '',
@@ -566,7 +609,7 @@ class Interpreter extends Stream.Transform {
         }
         if (path) {
             this.fromFile = fs.createReadStream(path, {
-                encoding: 'binary',
+                encoding: null, // Don't convert bytes to characters
                 highWaterMark: SeveralFrames,
             });
             this.fromFile.on('error', function(err) {
@@ -581,7 +624,7 @@ class Interpreter extends Stream.Transform {
                 delete that.fromFile;
             });
             this.outputLine(`Sending to ${remoteAddress} from ${path}.`);
-            this.fromFile.pipe(new DataTo(connection));
+            this.fromFile.pipe(new DataTo(connection, '> %s'));
         }
     }
 
@@ -608,7 +651,6 @@ class Interpreter extends Stream.Transform {
     }
 
     execute(path) {
-        const that = this;
         if (path) {
             const source = fs.createReadStream(path, {encoding: this.encoding});
             source.on('error', function(err) {
@@ -625,7 +667,7 @@ process.stdin.pipe(breaker);
 // At this point, the user can type INT or TERM to generate events,
 // but other input is simply buffered, not even echoed.
 
-const interpreter = new Interpreter(terminal, charset);
+const interpreter = new Interpreter(terminal, localEncoding);
 var connection = null;
 try {
     if (verbose) terminal.write('Connecting ...' + OS.EOL);
@@ -652,11 +694,11 @@ try {
     showUsage(4);
 }
 connection.on('end', function(info) {
-    log.debug('Connection emitted end(%j)', info || '')
+    if (log.debug()) log.debug('connection emitted end(%s)', (info == null) ? '' : formatChunk(info, remoteEncoding));
     terminal.write((messageFromAGW(info) || `Disconnected from ${remoteAddress}`) + OS.EOL);
 });
 connection.on('close', function(info) {
-    log.debug('Connection emitted close(%s)', info || '')
+    log.debug('connection emitted close(%s)', info || '')
     setTimeout(process.exit, 10);
 });
 ['error', 'timeout'].forEach(function(event) {
@@ -677,7 +719,7 @@ connection.pipe(receiver).pipe(new DataTo(terminal));
 });
 ['drain', 'pause', 'resume'].forEach(function(event) {
     interpreter.on(event, function(info) {
-        log.debug('interpreter emitted %s(%s)', event, info || '');
+        log.trace('interpreter emitted %s(%s)', event, info || '');
     });
 });
 [

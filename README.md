@@ -26,6 +26,11 @@ To get started:
 
 To see a summary of the command line options, run `.\converse.exe` (with no arguments).
 
+Characters from stdin and to stdout are encoded in UTF-8.
+Characters sent to the remote station and received from the remote station
+are encoded as specified by the command line option --encoding;
+the default is UTF-8.
+
 To communicate large amounts of text,
 you can copy-n-paste to or from your command line window.
 To copy all the text from a command line window,
