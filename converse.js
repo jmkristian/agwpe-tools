@@ -39,6 +39,28 @@ function fromASCII(s) {
     }
 }
 
+function encodingName(e) {
+    switch(e) {
+    case 'cp1252':
+    case 'cp-1252':
+        return 'windows-1252';
+    case 'iso 8859-1':
+    case 'iso-8859-1':
+    case 'iso_8859-1':
+    case 'iso8859-1':
+    case 'latin1':
+    case 'latin-1':
+    case 'cp-819':
+    case 'cp819':
+        // https://www.rfc-editor.org/rfc/rfc1345.html
+        return 'binary';
+    case 'utf-8':
+        return 'utf8';
+    default:
+    }
+    return e;
+}
+
 const args = minimist(process.argv.slice(2), {
     'boolean': ['debug', 'trace', 'debugTNC', 'traceTNC', 'verbose', 'v'],
     'string': ['via'],
@@ -46,7 +68,7 @@ const args = minimist(process.argv.slice(2), {
 const localAddress = args._[0];
 const localEncoding = 'utf8';
 const remoteAddress = args._[1];
-const remoteEncoding = (args.encoding || 'UTF-8').toLowerCase();
+const remoteEncoding = encodingName((args.encoding || 'UTF-8').toLowerCase());
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const ID = args.ID || args.id;
@@ -121,6 +143,70 @@ function controlify(from) {
     return into;
 }
 
+// Windows-1252 is the same as binary (ISO 8859-1), except for:
+const decodeWindows1252 = {
+    '\u0080': '\u20AC', // EURO SIGN
+    '\u0082': '\u201A', // SINGLE LOW-9 QUOTATION MARK
+    '\u0083': '\u0192', // LATIN SMALL LETTER F WITH HOOK
+    '\u0084': '\u201E', // DOUBLE LOW-9 QUOTATION MARK
+    '\u0085': '\u2026', // HORIZONTAL ELLIPSIS
+    '\u0086': '\u2020', // DAGGER
+    '\u0087': '\u2021', // DOUBLE DAGGER
+    '\u0088': '\u02C6', // MODIFIER LETTER CIRCUMFLEX ACCENT
+    '\u0089': '\u2030', // PER MILLE SIGN
+    '\u008A': '\u0160', // LATIN CAPITAL LETTER S WITH CARON
+    '\u008B': '\u2039', // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+    '\u008C': '\u0152', // LATIN CAPITAL LIGATURE OE
+    '\u008E': '\u017D', // LATIN CAPITAL LETTER Z WITH CARON
+    '\u0091': '\u2018', // LEFT SINGLE QUOTATION MARK
+    '\u0092': '\u2019', // RIGHT SINGLE QUOTATION MARK
+    '\u0093': '\u201C', // LEFT DOUBLE QUOTATION MARK
+    '\u0094': '\u201D', // RIGHT DOUBLE QUOTATION MARK
+    '\u0095': '\u2022', // BULLET
+    '\u0096': '\u2013', // EN DASH
+    '\u0097': '\u2014', // EM DASH
+    '\u0098': '\u02DC', // SMALL TILDE
+    '\u0099': '\u2122', // TRADE MARK SIGN
+    '\u009A': '\u0161', // LATIN SMALL LETTER S WITH CARON
+    '\u009B': '\u203A', // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+    '\u009C': '\u0153', // LATIN SMALL LIGATURE OE
+    '\u009E': '\u017E', // LATIN SMALL LETTER Z WITH CARON
+    '\u009F': '\u0178', // LATIN CAPITAL LETTER Y WITH DIAERESIS
+};
+const encodeWindows1252 = function invert(map) {
+    var result = {};
+    for (var key in map) {
+        result[map[key]] = key;
+    }
+    return result;
+}(decodeWindows1252);
+const specialWindows1252 = new RegExp('[' + Object.keys(encodeWindows1252).join('') + ']', 'g');
+
+/** Decode a string from a Buffer. */
+function decode(buffer, encoding) {
+    if (encoding == 'windows-1252') {
+        return buffer.toString('binary')
+            .replace(/[\u0080-\u009F]/g, function(c) {
+                return decodeWindows1252[c] || c;
+            });
+    } else {
+        return buffer.toString(encoding);
+    }
+}
+
+/** Encode a string into a Buffer. */
+function encode(data, encoding) {
+    if (encoding == 'windows-1252') {
+        return Buffer.from(
+            data.replace(specialWindows1252, function(c) {
+                return encodeWindows1252[c] || c;
+            }),
+            'binary');
+    } else {
+        return Buffer.from(data, encoding);
+    }
+}
+
 /** A Transform that optionally copies data into a second stream
     (in addition to pushing it). Interpreter.transcribe uses this
     to implement the 't' command.
@@ -169,6 +255,7 @@ function showUsage(exitCode) {
         `--via <digis>: A comma-separated list of digipeater call signs.`,
         `--ID <string>: identifies this station, e.g. when the local call sign is tactical.`,
         `--encoding <string>: encoding of characters exchanged with the remote station. default: UTF-8`,
+        `  Other supported encodings are "Windows-1252" and "ISO 8859-1".`,
         `--eol <string>: represents end-of-line to the remote station. default: CR`,
         `--escape <character>: switch from conversation to command mode. default: Ctrl+]`,
         `--frame-length N: maximum number of bytes per frame transmitted to the TNC. default: 128`,
@@ -275,7 +362,7 @@ class Receiver extends Stream.Transform {
     }
     _transform(chunk, encoding, callback) {
         logChunk(log.debug, '< %s', chunk, encoding);
-        var data = Buffer.isBuffer(chunk) ? chunk.toString(remoteEncoding) : chunk;
+        var data = Buffer.isBuffer(chunk) ? decode(chunk, remoteEncoding) : chunk;
         if (this.partialEOL && data.startsWith(remoteEOL.charAt(1))) {
             data = data.substring(1);
         }
@@ -339,7 +426,7 @@ class Breaker extends Stream.Transform {
     }
     _transform(chunk, encoding, callback) {
         logChunk(log.trace, 'Breaker._transform(%s)', chunk, encoding);
-        var result = Buffer.isBuffer(chunk) ? buffer.toString(localEncoding) : chunk;
+        var result = Buffer.isBuffer(chunk) ? chunk.toString(localEncoding) : chunk;
         if (this.pattern) {
             const that = this;
             result = result.replace(this.pattern, function(found) {
@@ -361,7 +448,7 @@ class Breaker extends Stream.Transform {
     control via write to stdout.
 */
 class Interpreter extends Stream.Transform {
-    constructor(terminal, encoding) {
+    constructor(terminal) {
         super({
             decodeStrings: false, // Don't convert strings to bytes
             encoding: null, // Don't convert bytes to strings
@@ -372,8 +459,6 @@ class Interpreter extends Stream.Transform {
         const that = this;
         this.log = log;
         this.terminal = terminal;
-        this.encoding = encoding;
-        this.setDefaultEncoding(encoding);
         this.isConversing = true;
         this.exBuf = [];
         this.inBuf = '';
@@ -384,8 +469,8 @@ class Interpreter extends Stream.Transform {
         if (!this.isConversing) this.outputData(prompt);
     }
     _transform(chunk, encoding, callback) {
-        logChunk(log.trace, 'Interpreter._transform(%s)', chunk, encoding);
-        this.exBuf.push(chunk);
+        //logChunk(log.trace, 'Interpreter._transform(%s)', chunk, encoding);
+        this.exBuf.push(Buffer.isBuffer(chunk) ? chunk.toString(localEncoding) : chunk);
         this.flushExBuf(callback);
     }
     _flush(callback) {
@@ -398,13 +483,13 @@ class Interpreter extends Stream.Transform {
             if ((typeof item) == 'function') {
                 item(); // callback
             } else if (item) {
-                this.parseInput(Buffer.isBuffer(item) ? item.toString(localEncoding) : item);
+                this.parseInput(item);
             }
         }
     }
     outputData(data) {
         if (this.isConversing) {
-            const chunk = Buffer.from(data, remoteEncoding);
+            const chunk = encode(data, remoteEncoding);
             logChunk(log.debug, '> %s', chunk);
             this.push(chunk);
         } else {
@@ -414,9 +499,9 @@ class Interpreter extends Stream.Transform {
     outputLine(line) {
         this.terminal.write((line != null ? line : '') + OS.EOL);
     }
-    parseInput(chunk) {
-        logChunk(log.trace, 'Interpreter.parseInput(%s)', chunk, this.encoding);
-        this.inBuf += chunk.toString(this.encoding);
+    parseInput(input) {
+        log.trace('Interpreter.parseInput(%s)', input);
+        this.inBuf += input;
         if (EOT) {
             const eot = this.inBuf.indexOf(EOT);
             if (eot == 0 && this.isRaw) {
@@ -635,7 +720,7 @@ class Interpreter extends Stream.Transform {
             delete this.terminal.copyTo;
         }
         if (path) {
-            const toFile = fs.createWriteStream(path, {encoding: this.encoding});
+            const toFile = fs.createWriteStream(path, {encoding: localEncoding});
             toFile.on('error', function(err) {
                 log.warn(err);
             });
@@ -652,7 +737,7 @@ class Interpreter extends Stream.Transform {
 
     execute(path) {
         if (path) {
-            const source = fs.createReadStream(path, {encoding: this.encoding});
+            const source = fs.createReadStream(path, {encoding: localEncoding});
             source.on('error', function(err) {
                 log.warn(err);
             });
@@ -667,7 +752,7 @@ process.stdin.pipe(breaker);
 // At this point, the user can type INT or TERM to generate events,
 // but other input is simply buffered, not even echoed.
 
-const interpreter = new Interpreter(terminal, localEncoding);
+const interpreter = new Interpreter(terminal);
 var connection = null;
 try {
     if (verbose) terminal.write('Connecting ...' + OS.EOL);
