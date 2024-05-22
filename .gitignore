@@ -4,3 +4,5 @@
 *.exe
 /node_modules
 /*.pfx
+/*.txt
+/echo.js
