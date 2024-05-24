@@ -36,6 +36,15 @@ var myCall = '';
 var tncPort = 0;
 var lastPacketBetween = {};
 
+const terminal = new Lines(ESC, log);
+var commandMode = false;
+var connection = null;
+const prompt = 'cmd:';
+var pathTo = {};
+var remoteAddress = args._[1];
+var server = null;
+var ending = false;
+
 /** Convert s to a javascript string literal (without the quotation marks.) */
 function escapify(s) {
     return s && s
@@ -164,14 +173,12 @@ function showUsage(exitCode) {
     if (exitCode != null) process.exit(exitCode);
 }
 
-function summarize(packet, terminal) {
+function summarize(packet) {
+    log.debug('summarize(%s)', packet);
     var marker = '';
     if (packet.fromAddress == myCall) {
         marker += '>' + packet.toAddress;
     } else if (packet.toAddress == myCall) {
-        if (packet.type == 'I' && allConnections[packet.fromAddress]) {
-            return; // Don't output it twice.
-        }
         marker += '<' + packet.fromAddress;
     } else {
         marker += packet.fromAddress + '>' + packet.toAddress;
@@ -189,331 +196,309 @@ function summarize(packet, terminal) {
     });
 }
 
-class Interpreter {
-
-    constructor(terminal, logger) {
-        this.terminal = terminal;
-        this.log = logger || shared.LogNothing;
-        this.commandMode = false;
-        this.prompt = 'cmd:';
-        this.pathTo = {};
-        this.remoteAddress = args._[1];
-        if (this.remoteAddress) validateCallSign('remote', this.remoteAddress);
-        if (ESC.length > 1) {
-            throw shared.newError(
-                `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
-                'ERR_INVALID_ARG_VALUE');
+function initialize() {
+    if (remoteAddress) validateCallSign('remote', remoteAddress);
+    if (ESC.length > 1) {
+        throw shared.newError(
+            `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
+            'ERR_INVALID_ARG_VALUE');
+    }
+    if (verbose && remoteAddress) {
+        terminal.writeLine(`(Transmit UI packets to ${remoteAddress}.)`);
+    }
+    terminal.on('escape', function() {
+        commandMode = !commandMode;
+        terminal.prompt(commandMode ? prompt : '');
+    });
+    terminal.on('line', function(line) {
+        try {
+            var info = line + remoteEOL;
+            if (commandMode) {
+                execute(line);
+            } else if (connection) {
+                connection.write(info, function sent() {
+                    terminal.writeLine(
+                        '>' + connection.remoteAddress + ' I ' + escapify(info));
+                });
+            } else if (remoteAddress) {
+                const via = getPathTo(remoteAddress);
+                socket.send({
+                    port: tncPort,
+                    type: 'UI',
+                    toAddress: remoteAddress,
+                    fromAddress: myCall,
+                    via: via || undefined,
+                    info: Buffer.from(info),
+                }, function sent() {
+                    terminal.writeLine(
+                        '>' + remoteAddress
+                            + (via ? ' via ' + via : '')
+                            + ' UI ' + escapify(info));
+                });
+            } else {
+                terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
+                commandMode = true;
+                terminal.prompt(prompt);
+            }
+        } catch(err) {
+            log.error(err);
         }
+    });
+    restartServer();
+}
+
+function restartServer() {
+    if (server) server.close();
+    server = new AGWPE.Server({
+        host: host,
+        port: port,
+        log: log,
+    });
+    server.on('connection', function(connection) {
+        const remoteAddress = connection.remoteAddress.toUpperCase();
+        allConnections[remoteAddress] = connection;
+        terminal.writeLine(
+            `(Received a connection.`
+                + `The command "C ${remoteAddress}" will start sending data there.)`);
+    });
+    server.on('error', function(err) {
+        log.error(err);
+    });
+    server.listen({
+        host: myCall,
+        port: tncPort,
+    }, function listening() {
         if (verbose) {
-            if (this.remoteAddress) {
-                this.terminal.writeLine(`(Transmit UI packets to ${this.remoteAddress}.)`);
+            terminal.writeLine(`(Listening for connections on TNC port ${tncPort}.)`);
+        }
+    });
+} // restartServer
+
+function getPathTo(remoteAddress) {
+    var best = bestPathTo[remoteAddress];
+    var path = pathTo[remoteAddress];
+    if (path == null) {
+        if (best) path = best.path.join(',');
+    } else if (best && best.path.length < path.split(/[\s,]+/).length
+               && [4, 8, 16, 32].indexOf(best.counter) >= 0) {
+        terminal.writeLine(`(${best.path.join(',')} looks like a better path than ${path}.)`);
+    }
+    log.trace('getPathTo(%s) = %s', remoteAddress, path);
+    return path;
+}
+
+function setPathTo(remoteAddress, path) {
+    log.trace('setPathTo(%s, %s)', remoteAddress, path);
+    if (path != null) {
+        pathTo[remoteAddress] = path;
+    }
+    return path;
+}
+
+function onPacket(packet) {
+    try {
+        log.trace('onPacket(%s)', packet);
+        if (packet.port == tncPort) {
+            noteReturnPath(packet);
+            if (verbose || packet.type == 'I' || packet.type == 'UI') {
+                summarize(packet);
             }
         }
-        const that = this;
-        this.terminal.on('escape', function() {
-            that.commandMode = !that.commandMode;
-            that.terminal.prompt(that.commandMode ? that.prompt : '');
-        });
-        this.terminal.on('line', function(line) {
+    } catch(err) {
+        log.error(err);
+    }
+}
+
+function viaOption(remoteAddress, parts) {
+    // A command line like "c a6call via" specifies no repeaters.
+    // But "c a6call" means use a recent path or the best observed path.
+    if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
+        return getPathTo(remoteAddress);
+    } else {
+        return setPathTo(remoteAddress, parseVia(parts[3]) || '');
+    }
+}
+
+function execute(command) {
+    log.trace(`cmd:${command}`);
+    try {
+        const parts = command.trim().split(/\s+/);
+        commandMode = false;
+        switch(parts[0].toLowerCase()) {
+        case '':
+            break;
+        case 'u':
+        case 'ui':
+        case 'unproto':
+            unproto(parts);
+            break;
+        case 'c':
+        case 'connect':
+            connect(parts);
+            break;
+        case 'd':
+        case 'disconnect':
+            disconnect(parts[1]);
+            break;
+        case 'p':
+        case 'port':
+            const newPort = AGWPE.validatePort(parts[1] || '0');
+            if (tncPort != newPort) {
+                tncPort = newPort;
+                restartServer();
+            }
+            if (verbose) {
+                terminal.writeLine(`(Communicating via TNC port ${tncPort}.)`);
+            }
+            break;
+        case 'b':
+        case 'bye':
+            bye();
+            break;
+        default:
+            terminal.writeLine(command + '?');
+            [
+                "The available commands are:",
+                "U[nproto] <call sign> [via <call sign>,...]",
+                "          : Start sending data in UI packets to",
+                "          : this call sign via these digipeaters.",
+                "C[onnect] <call sign> [via <call sign>,...]",
+                "          : Start sending data in a connection to",
+                "          : this call sign via these digipeaters.",
+                "D[isconnect] [call sign]",
+                "          : Disconnect from this call sign or,",
+                "          : (with no call sign) disconnect from the",
+                "          : station to which you're currently connected.",
+                "P[ort] <number>",
+                "          : Send and receive data via this AGWPE port (sound card).",
+                "B[ye]",
+                "          : Close all connections and exit.",
+            ].forEach(function(line) {
+                terminal.writeLine(line);
+            });
+            commandMode = true;;
+        }
+    } catch(err) {
+        log.error(err);
+        commandMode = true;;
+    }
+    terminal.prompt(commandMode ? prompt : '');
+} // execute
+
+function unproto(parts) {
+    const remoteAddress = validateCallSign('remote', parts[1]);
+    const via = viaOption(remoteAddress, parts);
+    remoteAddress = remoteAddress;
+    if (verbose) {
+        const viaNote = via ? ` via ${via}` : '';
+        terminal.writeLine(`(Transmit UI packets${viaNote} to ${remoteAddress}.)`);
+    }
+} // unproto
+
+function connect(parts) {
+    const remoteAddress = validateCallSign('remote', parts[1]);
+    const via = viaOption(remoteAddress, parts);
+    const viaNote = via ? ` via ${via}` : '';
+    connection = allConnections[remoteAddress];
+    if (connection) {
+        if (verbose) {
+            terminal.writeLine(`(Transmit I packets${viaNote} to ${remoteAddress}.)`);
+        }
+    } else {
+        const options = {
+            host: host,
+            port: port,
+            localPort: tncPort,
+            localAddress: myCall,
+            remoteAddress: remoteAddress,
+            via: via || undefined,
+        };
+        terminal.writeLine(`(Connecting${viaNote} to ${remoteAddress}...)`);
+        const newConnection = AGWPE.createConnection(options, function connected() {
             try {
-                var info = line + remoteEOL;
-                if (that.commandMode) {
-                    that.execute(line);
-                } else if (that.connection) {
-                    that.connection.write(info, function sent() {
-                        that.terminal.writeLine(
-                            '>' + that.connection.remoteAddress + ' I ' + escapify(info));
-                    });
-                } else if (that.remoteAddress) {
-                    const via = that.getPathTo(that.remoteAddress);
-                    socket.send({
-                        port: tncPort,
-                        type: 'UI',
-                        toAddress: that.remoteAddress,
-                        fromAddress: myCall,
-                        via: via || undefined,
-                        info: Buffer.from(info),
-                    }, function sent() {
-                        that.terminal.writeLine(
-                            '>' + that.remoteAddress
-                                + (via ? ' via ' + via : '')
-                                + ' UI ' + escapify(info));
-                    });
-                } else {
-                    that.terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
-                    that.commandMode = true;
-                    that.terminal.prompt(that.prompt);
-                }
+                connection = allConnections[remoteAddress] = newConnection;
+                connection.pipe(new Stream.Writable({
+                    write: function _write(chunk, encoding, callback) {
+/* We must consume the received data, but onPacket will log it.
+                        try {
+                            splitLines(chunk.toString(remoteEncoding)).forEach(function(line) {
+                                terminal.writeLine(`<${remoteAddress} I ${escapify(line)}`);
+                            });
+                        } catch(err) {
+                            log.error(err);
+                        }
+*/
+                        if (callback) callback();
+                    },
+                }));
+                terminal.writeLine(`(Connected to ${remoteAddress}.)`);
             } catch(err) {
                 log.error(err);
             }
         });
-        this.restartServer();
-    }
-
-    restartServer() {
-        const that = this;
-        if (this.server) this.server.close();
-        this.server = new AGWPE.Server({
-            host: host,
-            port: port,
-            logger: log,
-        });
-        this.server.on('connection', function(connection) {
-            const remoteAddress = connection.remoteAddress.toUpperCase();
-            allConnections[remoteAddress] = connection;
-            that.terminal.writeLine(
-                `(Received a connection.`
-                    + `The command "C ${remoteAddress}" will start sending data there.)`);
-        });
-        this.server.on('error', function(err) {
-            that.log.error(err);
-        });
-        this.server.listen({
-            host: myCall,
-            port: tncPort,
-        }, function listening() {
-            if (verbose) {
-                that.terminal.writeLine(`(Listening for connections on TNC port ${tncPort}.)`);
-            }
-        });
-    } // restartServer
-
-    getPathTo(remoteAddress) {
-        var best = bestPathTo[remoteAddress];
-        var path = this.pathTo[remoteAddress];
-        if (path == null) {
-            if (best) path = best.path.join(',');
-        } else if (best && best.path.length < path.split(/[\s,]+/).length
-                   && [4, 8, 16, 32].indexOf(best.counter) >= 0) {
-            this.terminal.writeLine(`(${best.path.join(',')} looks like a better path than ${path}.)`);
-        }
-        this.log.trace('getPathTo(%s) = %s', remoteAddress, path);
-        return path;
-    }
-
-    setPathTo(remoteAddress, path) {
-        this.log.trace('setPathTo(%s, %s)', remoteAddress, path);
-        if (path != null) {
-            this.pathTo[remoteAddress] = path;
-        }
-        return path;
-    }
-
-    onPacket(packet) {
-        try {
-            if (packet.port == tncPort) {
-                noteReturnPath(packet);
-                if (verbose) {
-                    summarize(packet, this.terminal);
-                } else {
-                    switch(packet.type) {
-                    case 'I':
-                    case 'UI':
-                        summarize(packet, this.terminal);
-                        break;
-                    default:
-                    }
+        ['end'].forEach(function(event) {
+            newConnection.on(event, function(info) {
+                if (info) {
+                    terminal.writeLine(
+                        '(' + escapify(info.toString(remoteEncoding)) + ')');
+                } else if (verbose) {
+                    terminal.writeLine(`(Disconnected from ${remoteAddress}.)`);
                 }
-            }
-        } catch(err) {
-            this.log.error(err);
-        }
-    }
-
-    viaOption(remoteAddress, parts) {
-        // A command line like "c a6call via" specifies no repeaters.
-        // But "c a6call" means use a recent path or the best observed path.
-        if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
-            return this.getPathTo(remoteAddress);
-        } else {
-            return this.setPathTo(remoteAddress, parseVia(parts[3]) || '');
-        }
-    }
-
-    execute(command) {
-        this.log.trace(`cmd:${command}`);
-        try {
-            const that = this;
-            const parts = command.trim().split(/\s+/);
-            this.commandMode = false;
-            switch(parts[0].toLowerCase()) {
-            case '':
-                break;
-            case 'u':
-            case 'ui':
-            case 'unproto':
-                this.unproto(parts);
-                break;
-            case 'c':
-            case 'connect':
-                this.connect(parts);
-                break;
-            case 'd':
-            case 'disconnect':
-                this.disconnect(parts[1]);
-                break;
-            case 'p':
-            case 'port':
-                const newPort = AGWPE.validatePort(parts[1] || '0');
-                if (tncPort != newPort) {
-                    tncPort = newPort;
-                    this.restartServer();
+                delete allConnections[remoteAddress];
+                if (connection === newConnection) {
+                    connection = null;
                 }
-                if (verbose) {
-                    this.terminal.writeLine(`(Communicating via TNC port ${tncPort}.)`);
-                }
-                break;
-            case 'b':
-            case 'bye':
-                this.bye();
-                break;
-            default:
-                this.terminal.writeLine(command + '?');
-                [
-                    "The available commands are:",
-                    "U[nproto] <call sign> [via <call sign>,...]",
-                    "          : Start sending data in UI packets to",
-                    "          : this call sign via these digipeaters.",
-                    "C[onnect] <call sign> [via <call sign>,...]",
-                    "          : Start sending data in a connection to",
-                    "          : this call sign via these digipeaters.",
-                    "D[isconnect] [call sign]",
-                    "          : Disconnect from this call sign or,",
-                    "          : (with no call sign) disconnect from the",
-                    "          : station to which you're currently connected.",
-                    "P[ort] <number>",
-                    "          : Send and receive data via this AGWPE port (sound card).",
-                    "B[ye]",
-                    "          : Close all connections and exit.",
-                ].forEach(function(line) {
-                    that.terminal.writeLine(line);
-                });
-                this.commandMode = true;;
-            }
-        } catch(err) {
-            this.log.error(err);
-            this.commandMode = true;;
-        }
-        this.terminal.prompt(this.commandMode ? this.prompt : '');
-    } // execute
-
-    unproto(parts) {
-        const remoteAddress = validateCallSign('remote', parts[1]);
-        const via = this.viaOption(remoteAddress, parts);
-        this.remoteAddress = remoteAddress;
-        if (verbose) {
-            const viaNote = via ? ` via ${via}` : '';
-            this.terminal.writeLine(`(Transmit UI packets${viaNote} to ${remoteAddress}.)`);
-        }
-    } // unproto
-
-    connect(parts) {
-        const remoteAddress = validateCallSign('remote', parts[1]);
-        const via = this.viaOption(remoteAddress, parts);
-        const viaNote = via ? ` via ${via}` : '';
-        this.connection = allConnections[remoteAddress];
-        if (this.connection) {
-            if (verbose) {
-                this.terminal.writeLine(`(Transmit I packets${viaNote} to ${remoteAddress}.)`);
-            }
-        } else {
-            const options = {
-                host: host,
-                port: port,
-                localPort: tncPort,
-                localAddress: myCall,
-                remoteAddress: remoteAddress,
-                via: via || undefined,
-            };
-            this.terminal.writeLine(`(Connecting${viaNote} to ${remoteAddress}...)`);
-            const that = this;
-            const newConnection = AGWPE.createConnection(options, function connected() {
-                try {
-                    that.connection = allConnections[remoteAddress] = newConnection;
-                    that.connection.pipe(new Stream.Writable({
-                        write: function _write(chunk, encoding, callback) {
-/* We must consume the received data, but this.onPacket will log it.
-                            try {
-                                splitLines(chunk.toString(remoteEncoding)).forEach(function(line) {
-                                    that.terminal.writeLine(`<${remoteAddress} I ${escapify(line)}`);
-                                });
-                            } catch(err) {
-                                that.log.error(err);
-                            }
-*/
-                            if (callback) callback();
-                        },
-                    }));
-                    that.terminal.writeLine(`(Connected to ${remoteAddress}.)`);
-                } catch(err) {
-                    that.log.error(err);
+                if (ending && Object.keys(allConnections).length <= 0) {
+                    process.exit();
                 }
             });
-            ['end'].forEach(function(event) {
-                newConnection.on(event, function(info) {
-                    if (info) {
-                        that.terminal.writeLine(
-                            '(' + escapify(info.toString(remoteEncoding)) + ')');
-                    } else if (verbose) {
-                        that.terminal.writeLine(`(Disconnected from ${remoteAddress}.)`);
-                    }
-                    delete allConnections[remoteAddress];
-                    if (that.connection === newConnection) {
-                        delete that.connection;
-                    }
-                    if (that.ending && Object.keys(allConnections).length <= 0) {
-                        process.exit();
-                    }
-                });
+        });
+        ['error', 'timeout'].forEach(function(event) {
+            newConnection.on(event, function(err) {
+                terminal.writeLine(`(${event} ${err || ''} from ${remoteAddress})`);
+                delete allConnections[remoteAddress];
+                if (connection === newConnection) {
+                    connection = null;
+                }
             });
-            ['error', 'timeout'].forEach(function(event) {
-                newConnection.on(event, function(err) {
-                    that.terminal.writeLine(`(${event} ${err || ''} from ${remoteAddress})`);
-                    delete allConnections[remoteAddress];
-                    if (that.connection === newConnection) {
-                        delete that.connection;
-                    }
-                });
-            });
-        }
-    } // connect
+        });
+    }
+} // connect
 
-    disconnect(arg) {
-        var remoteAddress = (arg || '').toUpperCase();
-        if (!remoteAddress && this.connection) {
-            remoteAddress = this.connection.remoteAddress.toUpperCase();
-        }
-        if (!remoteAddress) {
-            this.terminal.writeLine(`(You're not connected.)`);
+function disconnect(arg) {
+    var remoteAddress = (arg || '').toUpperCase();
+    if (!remoteAddress && connection) {
+        remoteAddress = connection.remoteAddress.toUpperCase();
+    }
+    if (!remoteAddress) {
+        terminal.writeLine(`(You're not connected.)`);
+    } else {
+        validateCallSign('remote', remoteAddress);
+        var target = allConnections[remoteAddress];
+        if (!target) {
+            terminal.writeLine(`(You haven't connected to ${remoteAddress}.)`);
         } else {
-            validateCallSign('remote', remoteAddress);
-            var target = allConnections[remoteAddress];
-            if (!target) {
-                this.terminal.writeLine(`(You haven't connected to ${remoteAddress}.)`);
-            } else {
-                this.terminal.writeLine(`>${remoteAddress} DISC`);
-                target.end();
-            }
+            terminal.writeLine(`>${remoteAddress} DISC`);
+            target.end();
         }
-    } // disconnect
+    }
+} // disconnect
 
-    bye() {
-        try {
-            for (var remoteAddress in allConnections) {
-                this.ending = true;
-                allConnections[remoteAddress].end();
-            }
-            if (this.ending) {
-                setTimeout(process.exit, 10000);
-            } else {
-                process.exit();
-            }
-        } catch(err) {
-            this.log.error(err);
+function bye() {
+    try {
+        for (var remoteAddress in allConnections) {
+            ending = true;
+            allConnections[remoteAddress].end();
         }
-    } // bye
-} // Interpreter
+        if (ending) {
+            setTimeout(process.exit, 10000);
+        } else {
+            process.exit();
+        }
+    } catch(err) {
+        log.error(err);
+    }
+} // bye
 
 try {
     myCall = validateCallSign('local', args._[0]);
@@ -524,12 +509,11 @@ try {
         tncPort: tncPort,
         remoteEOL: remoteEOL,
     });
-    const terminal = new Lines(ESC, log);
     terminal.on('SIGTERM', process.exit);
-    const interpreter = new Interpreter(terminal, log);
+    initialize();
     ['close', 'SIGINT'].forEach(function(event) {
         terminal.on(event, function(info) {
-            interpreter.bye();
+            bye();
         });
     });
     const socket = AGWPE.raw.createSocket({
@@ -540,7 +524,7 @@ try {
         if (ESC) terminal.writeLine(`(Type ${shared.controlify(ESC)} to enter a command.)`);
     });
     socket.on('packet', function(packet) {
-        interpreter.onPacket(packet);
+        onPacket(packet);
     });
     socket.on('error', function(err) {
         log.error('error(%s)', err != null ? err : '');
