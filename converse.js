@@ -4,71 +4,40 @@
     stdout. A simple command mode enables sending and receiving files.
  */
 "use strict";
-const AGWPE = require('@jmkristian/node-agwpe');
+const AGWPE = require('../node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
 const fs = require('fs');
 const minimist = require('minimist');
 const OS = require('os');
 const path = require('path');
+const shared = require('./shared.js');
 const Stream = require('stream');
 const util = require('util');
 
-function newError(message, code) {
-    const err = new Error(message);
-    if (code) err.code = code;
-    return err;
-}
+const BS = shared.BS;
+const DEL = shared.DEL;
+const EOT = shared.EOT;
+const INT = shared.INT;
 
-function fromASCII(s) {
-    if (s && s.length == 2 && s.charAt(0) == '^') {
-        var code = s.charCodeAt(1);
-        while (code >= 32) code = code - 32;
-        return String.fromCharCode(code);
-    }
-    switch(s) {
-    case 'ETX': return '\x03';
-    case 'EOT': return '\x04';
-    case 'CR': return '\r';
-    case 'LF': return '\n';
-    case 'CR LF': return '\r\n';
-    case 'CRLF': return '\r\n';
-    case 'FS': return '\x1C';
-    case 'GS': return '\x1D';
-    default: return s;
-    }
-}
-
-function encodingName(e) {
-    switch(e) {
-    case 'cp1252':
-    case 'cp-1252':
-        return 'windows-1252';
-    case 'iso 8859-1':
-    case 'iso-8859-1':
-    case 'iso_8859-1':
-    case 'iso8859-1':
-    case 'latin1':
-    case 'latin-1':
-    case 'cp-819':
-    case 'cp819':
-        // https://www.rfc-editor.org/rfc/rfc1345.html
-        return 'binary';
-    case 'utf-8':
-        return 'utf8';
-    default:
-    }
-    return e;
-}
+const controlify = shared.controlify;
+const decode = shared.decode;
+const formatChunk = shared.formatChunk;
+const fromASCII = shared.fromASCII;
+const hexBuffer = shared.hexBuffer;
+const hexByte = shared.hexByte;
+const localEncoding = shared.localEncoding;
+const logChunk = shared.logChunk;
+const messageFromAGW = shared.messageFromAGW;
+const newError = shared.newError;
 
 const args = minimist(process.argv.slice(2), {
     'boolean': ['debug', 'trace', 'debugTNC', 'traceTNC', 'verbose', 'v'],
     'string': ['via'],
 });
 const localAddress = args._[0];
-const localEncoding = 'utf8';
 const remoteAddress = args._[1];
-const remoteEncoding = encodingName((args.encoding || 'UTF-8').toLowerCase());
+const remoteEncoding = shared.encodingName((args.encoding || 'UTF-8').toLowerCase());
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const ID = args.ID || args.id;
@@ -85,13 +54,8 @@ const TERM = (args.kill == undefined) ? '\x1C' // FS = Windows Ctrl+Break
 
 const SeveralFrames = 4 * frameLength; // The number of bytes in several frames.
 
-const BS = '\x08'; // un-type previous character
-const DEL = '\x7F'; // un-type previous character
-const EOT = '\x04'; // Ctrl+D = flush line, or EOF at the start of a raw line.
-const INT = '\x03'; // Ctrl+C = graceful kill
 const prompt = 'cmd:';
 
-const allNULs = new RegExp('\0', 'g');
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
 const inputBreak = new RegExp('\r|\n|' + EOT + (ESC ? ('|' + ESC) : ''));
 
@@ -124,122 +88,7 @@ log.debug('%j', {
     TERM: TERM,
 });
 
-/** Convert control characters to 'Ctrl+X format. */
-function controlify(from) {
-    var into = '';
-    var wasControl = false;
-    for (var f = 0; f < from.length; ++f) {
-        var c = from.charCodeAt(f);
-        if (c >= 32) {
-            if (wasControl) into += ' ';
-            into += from.charAt(f);
-            wasControl = false;
-        } else { // a control character
-            if (into) into += ' ';
-            into += 'Ctrl+' + String.fromCharCode(c + 64);
-            wasControl = true;
-        }
-    }
-    return into;
-}
-
-// Windows-1252 is the same as binary (ISO 8859-1), except for:
-const decodeWindows1252 = {
-    '\u0080': '\u20AC', // EURO SIGN
-    '\u0082': '\u201A', // SINGLE LOW-9 QUOTATION MARK
-    '\u0083': '\u0192', // LATIN SMALL LETTER F WITH HOOK
-    '\u0084': '\u201E', // DOUBLE LOW-9 QUOTATION MARK
-    '\u0085': '\u2026', // HORIZONTAL ELLIPSIS
-    '\u0086': '\u2020', // DAGGER
-    '\u0087': '\u2021', // DOUBLE DAGGER
-    '\u0088': '\u02C6', // MODIFIER LETTER CIRCUMFLEX ACCENT
-    '\u0089': '\u2030', // PER MILLE SIGN
-    '\u008A': '\u0160', // LATIN CAPITAL LETTER S WITH CARON
-    '\u008B': '\u2039', // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
-    '\u008C': '\u0152', // LATIN CAPITAL LIGATURE OE
-    '\u008E': '\u017D', // LATIN CAPITAL LETTER Z WITH CARON
-    '\u0091': '\u2018', // LEFT SINGLE QUOTATION MARK
-    '\u0092': '\u2019', // RIGHT SINGLE QUOTATION MARK
-    '\u0093': '\u201C', // LEFT DOUBLE QUOTATION MARK
-    '\u0094': '\u201D', // RIGHT DOUBLE QUOTATION MARK
-    '\u0095': '\u2022', // BULLET
-    '\u0096': '\u2013', // EN DASH
-    '\u0097': '\u2014', // EM DASH
-    '\u0098': '\u02DC', // SMALL TILDE
-    '\u0099': '\u2122', // TRADE MARK SIGN
-    '\u009A': '\u0161', // LATIN SMALL LETTER S WITH CARON
-    '\u009B': '\u203A', // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
-    '\u009C': '\u0153', // LATIN SMALL LIGATURE OE
-    '\u009E': '\u017E', // LATIN SMALL LETTER Z WITH CARON
-    '\u009F': '\u0178', // LATIN CAPITAL LETTER Y WITH DIAERESIS
-};
-const encodeWindows1252 = function invert(map) {
-    var result = {};
-    for (var key in map) {
-        result[map[key]] = key;
-    }
-    return result;
-}(decodeWindows1252);
-const specialWindows1252 = new RegExp('[' + Object.keys(encodeWindows1252).join('') + ']', 'g');
-
-/** Decode a string from a Buffer. */
-function decode(buffer, encoding) {
-    if (encoding == 'windows-1252') {
-        return buffer.toString('binary')
-            .replace(/[\u0080-\u009F]/g, function(c) {
-                return decodeWindows1252[c] || c;
-            });
-    } else {
-        return buffer.toString(encoding);
-    }
-}
-
-/** Encode a string into a Buffer. */
-function encode(data, encoding) {
-    if (encoding == 'windows-1252') {
-        return Buffer.from(
-            data.replace(specialWindows1252, function(c) {
-                return encodeWindows1252[c] || c;
-            }),
-            'binary');
-    } else {
-        return Buffer.from(data, encoding);
-    }
-}
-
-/** A Transform that optionally copies data into a second stream
-    (in addition to pushing it). Interpreter.transcribe uses this
-    to implement the 't' command.
- */
-class Tee extends Stream.Transform {
-    constructor() {
-        super({
-            decodeStrings: false, // Don't convert strings to bytes
-            encoding: null, // Don't convert bytes to strings
-            // Don't buffer very much data. The writer will
-            // handle flow control if the reader is slow.
-            readableHighWaterMark: 256,
-            writableHighWaterMark: 256,
-        });
-    }
-    _transform(chunk, encoding, callback) {
-        this.push(chunk, encoding);
-        if (this.copyTo) {
-            this.copyTo.write(chunk, encoding, callback);
-        } else if (callback) {
-            callback();
-        }
-    }
-    _flush(callback) {
-        log.trace('Tee._flush');
-        if (this.copyTo) {
-            this.copyTo.end(undefined, undefined, callback);
-        } else if (callback) {
-            callback();
-        }
-    }
-}
-const terminal = new Tee();
+const terminal = new shared.Tee();
 terminal.pipe(process.stdout);
 
 function showUsage(exitCode) {
@@ -275,14 +124,6 @@ assertOneCharacter(ESC, 'escape', 1);
 assertOneCharacter(INT, 'interrupt', 3);
 assertOneCharacter(TERM, 'kill', 2);
 
-function messageFromAGW(info) {
-    return info && info.toString('latin1')
-        .replace(allNULs, '')
-        .replace(/^[\r\n]*/, '')
-        .replace(/[\r\n]*$/, '')
-        .replace(/[\r\n]+/g, OS.EOL);
-}
-
 function disconnectGracefully(signal) {
     log.debug('disconnectGracefully(%s)', signal || '');
     connection.end(); // should cause a 'close' event, eventually.
@@ -291,62 +132,6 @@ function disconnectGracefully(signal) {
         log.info(`Connection didn't close.`);
         process.exit(3);
     }, 5000);
-}
-
-function hexByte(from) {
-    return ((from >> 4) & 0x0F).toString(16) + (from & 0x0F).toString(16)
-}
-
-function hexBuffer(buffer) {
-    var hex = '';
-    for (var f = 0; f < buffer.length; ++f) {
-        if (hex) hex += ' ';
-        hex += hexByte(buffer[f]);
-    }
-    return hex;
-}
-
-function formatChunk(chunk, encoding) {
-    if (Buffer.isBuffer(chunk)) {
-        return hexBuffer(chunk);
-    } else {
-        return util.format('%s %j', encoding, chunk);
-    }
-}
-
-function logChunk(level, format, chunk, encoding) {
-    if (level.apply(log, [])) {
-        level.apply(log, [format, formatChunk(chunk, encoding)]);
-    }
-}
-
-/** A Transform that simply passes data but not 'end'.
-    This is used to pipe multiple streams into one.
- */
-class DataTo extends Stream.Transform {
-    constructor(target, logFormat) {
-        super({
-            decodeStrings: false, // Don't convert strings to bytes
-            encoding: null, // Don't convert bytes to strings
-        });
-        this.target = target;
-        this.logFormat = logFormat;
-    }
-    _transform(chunk, encoding, callback) {
-        try {
-            if (this.logFormat) {
-                logChunk(log.debug, this.logFormat, chunk, encoding);
-            }
-            this.target.write(chunk, encoding, callback);
-        } catch(err) {
-            log.debug(err);
-            if (callback) callback(err);
-        }
-    }
-    _flush(callback) {
-        if (callback) callback();
-        // But don't molest the target.
-    }
 }
 
 /** A Transform that changes remoteEOL to OS.EOL, and
@@ -361,7 +146,7 @@ class Receiver extends Stream.Transform {
         });
     }
     _transform(chunk, encoding, callback) {
-        logChunk(log.debug, '< %s', chunk, encoding);
+        logChunk(log, log.debug, '< %s', chunk, encoding);
         var data = Buffer.isBuffer(chunk) ? decode(chunk, remoteEncoding) : chunk;
         if (this.partialEOL && data.startsWith(remoteEOL.charAt(1))) {
             data = data.substring(1);
@@ -392,54 +177,6 @@ class Receiver extends Stream.Transform {
 }
 const receiver = new Receiver();
 
-/** If the input stream is a TTY, setRawMode and set this.isRaw = true.
-    Emit events when input contains INT or TERM.
-*/
-class Breaker extends Stream.Transform {
-    constructor(INT, TERM) {
-        super({
-            decodeStrings: false, // Don't convert strings to bytes
-            encoding: null, // Don't convert bytes to strings
-            readableHighWaterMark: 128,
-            writableHighWaterMark: 128,
-        });
-        this.INT = INT;
-        this.TERM = TERM;
-        if (INT || TERM) {
-            this.pattern = new RegExp(`${INT}|${TERM}`, 'g');
-        }
-        const that = this;
-        this.on('pipe', function(from) {
-            that.isRaw = false;
-            try {
-                if (from.isTTY) {
-                    if (from.setEncoding) from.setEncoding(localEncoding);
-                    if (from.setRawMode) {
-                        from.setRawMode(true);
-                        that.isRaw = true;
-                    }
-                }
-            } catch(err) {
-                that.log.warn(err);
-            }
-        });
-    }
-    _transform(chunk, encoding, callback) {
-        logChunk(log.trace, 'Breaker._transform(%s)', chunk, encoding);
-        var result = Buffer.isBuffer(chunk) ? chunk.toString(localEncoding) : chunk;
-        if (this.pattern) {
-            const that = this;
-            result = result.replace(this.pattern, function(found) {
-                if (found == that.INT) that.emit('SIGINT');
-                else if (found == that.TERM) that.emit('SIGTERM');
-                return '';
-            });
-        }
-        this.push(result, localEncoding);
-        if (callback) callback();
-    }
-} // Breaker
-
 /** Handle input from stdin. When conversing, pipe it (to a connection).
     Otherwise interpret it as commands. We trust that conversation data
     may come fast (e.g. from copy-n-paste), but command data come slowly
@@ -469,7 +206,7 @@ class Interpreter extends Stream.Transform {
         if (!this.isConversing) this.outputData(prompt);
     }
     _transform(chunk, encoding, callback) {
-        //logChunk(log.trace, 'Interpreter._transform(%s)', chunk, encoding);
+        //logChunk(log, log.trace, 'Interpreter._transform(%s)', chunk, encoding);
         this.exBuf.push(Buffer.isBuffer(chunk) ? chunk.toString(localEncoding) : chunk);
         this.flushExBuf(callback);
     }
@@ -489,8 +226,8 @@ class Interpreter extends Stream.Transform {
     }
     outputData(data) {
         if (this.isConversing) {
-            const chunk = encode(data, remoteEncoding);
-            logChunk(log.debug, '> %s', chunk);
+            const chunk = shared.encode(data, remoteEncoding);
+            logChunk(log, log.debug, '> %s', chunk);
             this.push(chunk);
         } else {
             this.terminal.write(data);
@@ -709,7 +446,7 @@ class Interpreter extends Stream.Transform {
                 delete that.fromFile;
             });
             this.outputLine(`Sending to ${remoteAddress} from ${path}.`);
-            this.fromFile.pipe(new DataTo(connection, '> %s'));
+            this.fromFile.pipe(new shared.DataTo(connection, log, '> %s'));
         }
     }
 
@@ -741,13 +478,13 @@ class Interpreter extends Stream.Transform {
             source.on('error', function(err) {
                 log.warn(err);
             });
-            source.pipe(new DataTo(this));
+            source.pipe(new shared.DataTo(this, log));
         }
     }
 
 } // Interpreter
 
-const breaker = new Breaker(INT, TERM);
+const breaker = new shared.Breaker(INT, TERM);
 process.stdin.pipe(breaker);
 // At this point, the user can type INT or TERM to generate events,
 // but other input is simply buffered, not even echoed.
@@ -792,7 +529,7 @@ connection.on('close', function(info) {
     });
 });
 
-connection.pipe(receiver).pipe(new DataTo(terminal));
+connection.pipe(receiver).pipe(new shared.DataTo(terminal, log));
 ['end', 'close'].forEach(function(event) {
     receiver.on(event, function(info) {
         log.debug('receiver emitted %s(%s)', event, info || '');
