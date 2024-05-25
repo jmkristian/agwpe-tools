@@ -13,7 +13,7 @@ const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
     'boolean': ['debug', 'trace', 'verbose', 'v'],
-    'string': ['encoding', 'eol', 'escape', 'port', 'tnc-port', 'tncport', 'via'],
+    'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
 });
 const log = Bunyan.createLogger({
     name: 'chatter',
@@ -26,6 +26,7 @@ const ESC = (args.escape == undefined) ? '\x1D' // GS = Ctrl+]
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const port = args.port || args.p || 8000;
+const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const remoteEncoding = shared.encodingName((args.encoding || 'binary').toLowerCase());
 const verbose = args.verbose || args.v;
@@ -34,14 +35,14 @@ var allConnections = {};
 var bestPathTo = {};
 var myCall = '';
 var tncPort = 0;
-var lastPacketBetween = {};
 
 const terminal = new Lines(ESC, log);
-var commandMode = false;
+var commandMode = true;
+const commandPrompt = 'cmd:';
+var hasEscaped = false;
 var connection = null;
-const prompt = 'cmd:';
 var pathTo = {};
-var remoteAddress = args._[1];
+var remoteAddress = null;
 var server = null;
 var ending = false;
 
@@ -67,7 +68,7 @@ function splitLines(from) {
     var into = [];
     var last = null;
     from.split(remoteEOL).forEach(function(line) {
-        into.push(line + remoteEOL);
+        into.push(line + (showEOL ? remoteEOL : ''));
         last = line;
     });
     if (last == '') {
@@ -91,19 +92,24 @@ function parseVia(via) {
     return result;
 }
 
+var lastPacketBetween = {};
+const sec = 1000;
+
 function isRepetitive(packet) {
     try {
+        const now = Date.now();
+        const key = validateCallSign('source', packet.fromAddress)
+              + '>' + validateCallSign('destination', packet.toAddress);
+        const recent = lastPacketBetween[key];
         const current = packet.type
               + ' ' + packet.NR + ' ' + packet.NS +
               + ' ' + (packet.P || packet.F)
               + (packet.info ? ' ' + packet.info.toString('binary') : '');
-        const key = validateCallSign('source', packet.fromAddress)
-              + '>' + validateCallSign('destination', packet.toAddress);
-        const recent = lastPacketBetween[key];
-        if (current == recent) {
+        if (!recent || recent.packet != current) {
+            lastPacketBetween[key] = {packet: current, when: now};
+        } else if (now - recent.when < 15 * sec) {
+            recent.when = now;
             return true; // repetitive
-        } else {
-            lastPacketBetween[key] = current;
         }
     } catch(err) {
         log.warn(err);
@@ -161,12 +167,13 @@ function showUsage(exitCode) {
         `Supported options are:`,
         `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
         `--port N            : TCP port of the TNC. Default: 8000`,
-        `--tnc-port N        : TNC port (sound card number). range 0-255. Default: 0`,
+        `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
         `--via <repeater,...>: a comma-separated list of digipeaters via which to relay packets.`,
-        `--encoding <string> : encoding of characters exchanged with the remote station. Default: UTF-8`,
-        `                      Other supported encodings are "Windows-1252" and "ISO 8859-1".`,
-        `--eol <string>      : represents end-of-line to the remote station. Default: CR`,
-        `--escape <character>: switches from sending data to entering a command. Default: Ctrl+]`,
+//        `--encoding <string> : encoding of characters exchanged with other stations. Default: ISO 8859-1`,
+//        `                      Other supported encodings are "Windows-1252" and "UTF-8".`,
+        `--eol <string>      : represents end-of-line to other stations. Default: CR`,
+        `--show-eol          : display end-of-line characters. Default: false`,
+        `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
         `--verbose           : output more information about what's happening.`,
         '',
     ].join(OS.EOL));
@@ -174,7 +181,7 @@ function showUsage(exitCode) {
 }
 
 function summarize(packet) {
-    log.debug('summarize(%s)', packet);
+    log.trace('summarize(%s)', packet);
     var marker = '';
     if (packet.fromAddress == myCall) {
         marker += '>' + packet.toAddress;
@@ -196,29 +203,32 @@ function summarize(packet) {
     });
 }
 
+function setCommandMode(newMode) {
+    if (commandMode != newMode) {
+        if (commandMode && !hasEscaped) {
+            hasEscaped = true;
+            terminal.writeLine('(Type data to send'
+                               + (ESC ? `, or ${shared.controlify(ESC)} to enter a command` : '')
+                               + '.)');
+        }
+        commandMode = newMode;
+    }
+    terminal.prompt(commandMode ? commandPrompt : '');
+}
+
 function initialize() {
-    if (remoteAddress) validateCallSign('remote', remoteAddress);
-    if (ESC.length > 1) {
-        throw shared.newError(
-            `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
-            'ERR_INVALID_ARG_VALUE');
-    }
-    if (verbose && remoteAddress) {
-        terminal.writeLine(`(Transmit UI packets to ${remoteAddress}.)`);
-    }
-    terminal.on('escape', function() {
-        commandMode = !commandMode;
-        terminal.prompt(commandMode ? prompt : '');
-    });
+    setCommandMode (!remoteAddress);
+    terminal.on('escape', function() {setCommandMode(!commandMode);});
     terminal.on('line', function(line) {
         try {
-            var info = line + remoteEOL;
+            const info = line + remoteEOL;
             if (commandMode) {
                 execute(line);
             } else if (connection) {
                 connection.write(info, function sent() {
                     terminal.writeLine(
-                        '>' + connection.remoteAddress + ' I ' + escapify(info));
+                        '>' + connection.remoteAddress
+                            + ' I ' + escapify(showEOL ? info : line));
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
@@ -233,12 +243,11 @@ function initialize() {
                     terminal.writeLine(
                         '>' + remoteAddress
                             + (via ? ' via ' + via : '')
-                            + ' UI ' + escapify(info));
+                            + ' UI ' + escapify(showEOL ? info : line));
                 });
             } else {
                 terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
-                commandMode = true;
-                terminal.prompt(prompt);
+                setCommandMode(true);
             }
         } catch(err) {
             log.error(err);
@@ -259,7 +268,7 @@ function restartServer() {
         allConnections[remoteAddress] = connection;
         terminal.writeLine(
             `(Received a connection.`
-                + `The command "C ${remoteAddress}" will start sending data there.)`);
+                + ` The command "c ${remoteAddress}" will start sending data there.)`);
     });
     server.on('error', function(err) {
         log.error(err);
@@ -300,7 +309,9 @@ function onPacket(packet) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (verbose || packet.type == 'I' || packet.type == 'UI') {
+            if (verbose
+                || (!isRepetitive(packet) // Call this first for its side effect.
+                    && (packet.type == 'I' || packet.type == 'UI'))) {
                 summarize(packet);
             }
         }
@@ -321,9 +332,9 @@ function viaOption(remoteAddress, parts) {
 
 function execute(command) {
     log.trace(`cmd:${command}`);
+    var nextCommandMode = false;
     try {
         const parts = command.trim().split(/\s+/);
-        commandMode = false;
         switch(parts[0].toLowerCase()) {
         case '':
             break;
@@ -334,6 +345,7 @@ function execute(command) {
             break;
         case 'c':
         case 'connect':
+            nextCommandMode = true;
             connect(parts);
             break;
         case 'd':
@@ -376,19 +388,18 @@ function execute(command) {
             ].forEach(function(line) {
                 terminal.writeLine(line);
             });
-            commandMode = true;;
+            nextCommandMode = true;
         }
     } catch(err) {
         log.error(err);
-        commandMode = true;;
+        nextCommandMode = true;
     }
-    terminal.prompt(commandMode ? prompt : '');
+    setCommandMode(nextCommandMode);
 } // execute
 
 function unproto(parts) {
-    const remoteAddress = validateCallSign('remote', parts[1]);
+    remoteAddress = validateCallSign('remote', parts[1]);
     const via = viaOption(remoteAddress, parts);
-    remoteAddress = remoteAddress;
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
         terminal.writeLine(`(Transmit UI packets${viaNote} to ${remoteAddress}.)`);
@@ -396,7 +407,7 @@ function unproto(parts) {
 } // unproto
 
 function connect(parts) {
-    const remoteAddress = validateCallSign('remote', parts[1]);
+    remoteAddress = validateCallSign('remote', parts[1]);
     const via = viaOption(remoteAddress, parts);
     const viaNote = via ? ` via ${via}` : '';
     connection = allConnections[remoteAddress];
@@ -419,19 +430,12 @@ function connect(parts) {
                 connection = allConnections[remoteAddress] = newConnection;
                 connection.pipe(new Stream.Writable({
                     write: function _write(chunk, encoding, callback) {
-/* We must consume the received data, but onPacket will log it.
-                        try {
-                            splitLines(chunk.toString(remoteEncoding)).forEach(function(line) {
-                                terminal.writeLine(`<${remoteAddress} I ${escapify(line)}`);
-                            });
-                        } catch(err) {
-                            log.error(err);
-                        }
-*/
+                        // onPacket will log the received data.
                         if (callback) callback();
                     },
                 }));
                 terminal.writeLine(`(Connected to ${remoteAddress}.)`);
+                setCommandMode(false);
             } catch(err) {
                 log.error(err);
             }
@@ -491,7 +495,7 @@ function bye() {
             allConnections[remoteAddress].end();
         }
         if (ending) {
-            setTimeout(process.exit, 10000);
+            setTimeout(process.exit, 10 * sec);
         } else {
             process.exit();
         }
@@ -501,8 +505,14 @@ function bye() {
 } // bye
 
 try {
-    myCall = validateCallSign('local', args._[0]);
     tncPort = AGWPE.validatePort(args['tnc-port'] || args.tncport || 0);
+    myCall = validateCallSign('local', args._[0]);
+    remoteAddress = args._[1] ? validateCallSign('remote', args._[1]) : null;
+    if (ESC && ESC.length > 1) {
+        throw shared.newError(
+            `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
+            'ERR_INVALID_ARG_VALUE');
+    }
     log.debug('%s"', {
         verbose: verbose,
         myCall: myCall,
@@ -521,7 +531,6 @@ try {
         port: port,
         logger: log,
     }, function connected() {
-        if (ESC) terminal.writeLine(`(Type ${shared.controlify(ESC)} to enter a command.)`);
     });
     socket.on('packet', function(packet) {
         onPacket(packet);
