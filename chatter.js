@@ -12,7 +12,7 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'trace', 'verbose', 'v'],
+    'boolean': ['debug', 'show-eol', 'show-time', 'trace', 'verbose', 'v'],
     'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
 });
 const log = Bunyan.createLogger({
@@ -30,6 +30,7 @@ const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const verbose = args.verbose || args.v;
+const showTime = args['show-time'];
 
 var allConnections = {};
 var bestPathTo = {};
@@ -159,6 +160,24 @@ function noteReturnPath(packet) {
     return null;
 }
 
+function pad2(n) {
+    return (n <= 9) ? '0' + n : '' + n;
+}
+
+function logLine(line, callback) {
+    if (showTime) {
+        const now = new Date();
+        terminal.writeLine(
+            pad2(now.getHours())
+                + ':' + pad2(now.getMinutes())
+                + ':' + pad2(now.getSeconds())
+                + ' ' + line,
+            callback);
+    } else {
+        terminal.writeLine(line, callback);
+    }
+}
+
 function showUsage(exitCode) {
     const arg0 = path.basename(process.argv[0]);
     const myName = arg0 + ((arg0 == 'chatter.exe') ? '' : (' ' + path.basename(process.argv[1])));
@@ -169,13 +188,14 @@ function showUsage(exitCode) {
         `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
-        `--via <repeater,...>: a comma-separated list of digipeaters via which to relay packets.`,
-        `--encoding <string> : encoding of characters exchanged with other stations. Default: ISO 8859-1`,
-        `                      Other supported encodings are "Windows-1252" and "UTF-8".`,
-        `--eol <string>      : represents end-of-line to other stations. Default: CR`,
-        `--show-eol          : display end-of-line characters. Default: false`,
+        `--via <repeater,...>: a comma-separated list of digipeaters via which to send packets.`,
+        `--show-time         : show the time when data are sent or received. Default: false`,
+        `--show-eol          : show end-of-line characters. Default: false`,
+        `--verbose           : show more information about what's happening. Default: false`,
+        `--eol <string>      : represents end-of-line in data sent or received. Default: CR`,
         `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
-        `--verbose           : output more information about what's happening.`,
+        `--encoding <string> : encoding of characters sent or received. Default: ISO 8859-1`,
+        `                      Other supported encodings are Windows-1252 and UTF-8.`,
         '',
     ].join(OS.EOL));
     if (exitCode != null) process.exit(exitCode);
@@ -200,7 +220,7 @@ function summarize(packet) {
     }
     marker += ` ${packet.type}`;
     splitLines(shared.decode(packet.info || '', remoteEncoding)).forEach(function(line) {
-        terminal.writeLine(`${marker} ${escapify(line)}`);
+        logLine(`${marker} ${escapify(line)}`);
     });
 }
 
@@ -227,7 +247,7 @@ function initialize() {
                 execute(line);
             } else if (connection) {
                 connection.write(info, function sent() {
-                    terminal.writeLine(
+                    logLine(
                         '>' + connection.remoteAddress
                             + ' I ' + escapify(line + (showEOL ? remoteEOL : '')));
                 });
@@ -241,7 +261,7 @@ function initialize() {
                     via: via || undefined,
                     info: info,
                 }, function sent() {
-                    terminal.writeLine(
+                    logLine(
                         '>' + remoteAddress
                             + (via ? ' via ' + via : '')
                             + ' UI ' + escapify(line + (showEOL ? remoteEOL : '')));
@@ -444,10 +464,10 @@ function connect(parts) {
         ['end'].forEach(function(event) {
             newConnection.on(event, function(info) {
                 if (info) {
-                    terminal.writeLine(
+                    logLine(
                         '(' + escapify(shared.decode(info, remoteEncoding)) + ')');
                 } else if (verbose) {
-                    terminal.writeLine(`(Disconnected from ${remoteAddress}.)`);
+                    logLine(`(Disconnected from ${remoteAddress}.)`);
                 }
                 delete allConnections[remoteAddress];
                 if (connection === newConnection) {
@@ -483,7 +503,7 @@ function disconnect(arg) {
         if (!target) {
             terminal.writeLine(`(You haven't connected to ${remoteAddress}.)`);
         } else {
-            terminal.writeLine(`>${remoteAddress} DISC`);
+            logLine(`>${remoteAddress} DISC`);
             target.end();
         }
     }
