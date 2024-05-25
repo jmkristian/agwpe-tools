@@ -20,7 +20,7 @@ const log = Bunyan.createLogger({
     level: args.trace ? Bunyan.TRACE : args.debug ? Bunyan.DEBUG : Bunyan.INFO,
     stream: bunyanFormat({outputMode: 'short', color: false}, process.stderr),
 });
-const controlCharacters = new RegExp('[\x00-\x1F]|[\x7F-\uFFFF]', 'g');
+const controlCharacters = new RegExp('[\x00-\x1F]|[\x7F-\u00A0]', 'g');
 const ESC = (args.escape == undefined) ? '\x1D' // GS = Ctrl+]
       : shared.fromASCII(args.escape);
 const frameLength = parseInt(args['frame-length'] || '128');
@@ -28,7 +28,7 @@ const host = args.host || '127.0.0.1'; // localhost, IPv4
 const port = args.port || args.p || 8000;
 const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
-const remoteEncoding = shared.encodingName((args.encoding || 'binary').toLowerCase());
+const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const verbose = args.verbose || args.v;
 
 var allConnections = {};
@@ -36,7 +36,8 @@ var bestPathTo = {};
 var myCall = '';
 var tncPort = 0;
 
-const terminal = new Lines(ESC, log);
+const terminal = new Lines(process.stdout, ESC, log);
+process.stdin.pipe(terminal);
 var commandMode = true;
 const commandPrompt = 'cmd:';
 var hasEscaped = false;
@@ -57,7 +58,7 @@ function escapify(s) {
             if (code <= 0xFF) {
                 return '\\x' + (code + 0x100).toString(16).substring(1).toUpperCase();
             } else {
-                return '\\u' + (code + 0x100000).toString(16).substring(4).toUpperCase();
+                return '\\u' + (code + 0x100000).toString(16).substring(2).toUpperCase();
             }
         });
 }
@@ -169,8 +170,8 @@ function showUsage(exitCode) {
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
         `--via <repeater,...>: a comma-separated list of digipeaters via which to relay packets.`,
-//        `--encoding <string> : encoding of characters exchanged with other stations. Default: ISO 8859-1`,
-//        `                      Other supported encodings are "Windows-1252" and "UTF-8".`,
+        `--encoding <string> : encoding of characters exchanged with other stations. Default: ISO 8859-1`,
+        `                      Other supported encodings are "Windows-1252" and "UTF-8".`,
         `--eol <string>      : represents end-of-line to other stations. Default: CR`,
         `--show-eol          : display end-of-line characters. Default: false`,
         `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
@@ -198,7 +199,7 @@ function summarize(packet) {
         }
     }
     marker += ` ${packet.type}`;
-    splitLines((packet.info || '').toString(remoteEncoding)).forEach(function(line) {
+    splitLines(shared.decode(packet.info || '', remoteEncoding)).forEach(function(line) {
         terminal.writeLine(`${marker} ${escapify(line)}`);
     });
 }
@@ -221,14 +222,14 @@ function initialize() {
     terminal.on('escape', function() {setCommandMode(!commandMode);});
     terminal.on('line', function(line) {
         try {
-            const info = line + remoteEOL;
+            const info = shared.encode(line + remoteEOL, remoteEncoding);
             if (commandMode) {
                 execute(line);
             } else if (connection) {
                 connection.write(info, function sent() {
                     terminal.writeLine(
                         '>' + connection.remoteAddress
-                            + ' I ' + escapify(showEOL ? info : line));
+                            + ' I ' + escapify(line + (showEOL ? remoteEOL : '')));
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
@@ -238,12 +239,12 @@ function initialize() {
                     toAddress: remoteAddress,
                     fromAddress: myCall,
                     via: via || undefined,
-                    info: Buffer.from(info),
+                    info: info,
                 }, function sent() {
                     terminal.writeLine(
                         '>' + remoteAddress
                             + (via ? ' via ' + via : '')
-                            + ' UI ' + escapify(showEOL ? info : line));
+                            + ' UI ' + escapify(line + (showEOL ? remoteEOL : '')));
                 });
             } else {
                 terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
@@ -424,7 +425,7 @@ function connect(parts) {
             remoteAddress: remoteAddress,
             via: via || undefined,
         };
-        terminal.writeLine(`(Connecting${viaNote} to ${remoteAddress}...)`);
+        terminal.writeLine(`(Connecting to ${remoteAddress}${viaNote}...)`);
         const newConnection = AGWPE.createConnection(options, function connected() {
             try {
                 connection = allConnections[remoteAddress] = newConnection;
@@ -434,7 +435,7 @@ function connect(parts) {
                         if (callback) callback();
                     },
                 }));
-                terminal.writeLine(`(Connected to ${remoteAddress}.)`);
+                terminal.writeLine(`(Connected to ${remoteAddress}${viaNote}.)`);
                 setCommandMode(false);
             } catch(err) {
                 log.error(err);
@@ -444,7 +445,7 @@ function connect(parts) {
             newConnection.on(event, function(info) {
                 if (info) {
                     terminal.writeLine(
-                        '(' + escapify(info.toString(remoteEncoding)) + ')');
+                        '(' + escapify(shared.decode(info, remoteEncoding)) + ')');
                 } else if (verbose) {
                     terminal.writeLine(`(Disconnected from ${remoteAddress}.)`);
                 }
