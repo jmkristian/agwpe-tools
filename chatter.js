@@ -12,7 +12,7 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'show-eol', 'show-time', 'trace', 'verbose', 'v'],
+    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'trace', 'verbose', 'v'],
     'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
 });
 const log = Bunyan.createLogger({
@@ -26,6 +26,7 @@ const ESC = (args.escape == undefined) ? '\x1D' // GS = Ctrl+]
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const port = args.port || args.p || 8000;
+const showControls = args['show-controls'];
 const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
@@ -50,6 +51,7 @@ var ending = false;
 
 /** Convert s to a javascript string literal (without the quotation marks.) */
 function escapify(s) {
+    if (!showControls) return s;
     return s && s
         .replace(/\\/g, '\\\\')
         .replace(/\r/g, '\\r')
@@ -189,8 +191,9 @@ function showUsage(exitCode) {
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
         `--via <repeater,...>: a comma-separated list of digipeaters via which to send packets.`,
-        `--show-time         : show the time when data are sent or received. Default: false`,
+        `--show-controls     : show unprintable characters (as string literals). Default: false`,
         `--show-eol          : show end-of-line characters. Default: false`,
+        `--show-time         : show the time when data are sent or received. Default: false`,
         `--verbose           : show more information about what's happening. Default: false`,
         `--eol <string>      : represents end-of-line in data sent or received. Default: CR`,
         `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
