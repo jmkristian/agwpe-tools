@@ -197,7 +197,7 @@ function showUsage(exitCode) {
         `--verbose           : show more information about what's happening. Default: false`,
         `--eol <string>      : represents end-of-line in data sent or received. Default: CR`,
         `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
-        `--encoding <string> : encoding of characters sent or received. Default: ISO 8859-1`,
+        `--encoding <string> : encoding of characters sent or received. Default: ISO-8859-1`,
         `                      Other supported encodings are Windows-1252 and UTF-8.`,
         '',
     ].join(OS.EOL));
@@ -531,6 +531,7 @@ function bye() {
 try {
     tncPort = AGWPE.validatePort(args['tnc-port'] || args.tncport || 0);
     myCall = validateCallSign('local', args._[0]);
+    shared.validateEncoding(remoteEncoding);
     remoteAddress = args._[1] ? validateCallSign('remote', args._[1]) : null;
     if (ESC && ESC.length > 1) {
         throw shared.newError(

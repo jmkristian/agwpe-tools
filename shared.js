@@ -117,6 +117,17 @@ function encodingName(e) {
     return e;
 }
 
+function validateEncoding(e) {
+    switch(e && e.toLowerCase()) {
+    case 'binary':
+    case 'utf8':
+    case 'windows-1252':
+        return;
+    default:
+    }
+    throw(`Sorry, I don't support the encoding ${e}.`);
+}
+
 /** Convert control characters to 'Ctrl+X format. */
 function controlify(from) {
     var into = '';
@@ -375,3 +386,4 @@ exports.logChunk = logChunk;
 exports.messageFromAGW = messageFromAGW;
 exports.newError = newError;
 exports.Tee = Tee;
+exports.validateEncoding = validateEncoding;
