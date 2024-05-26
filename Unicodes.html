@@ -142,8 +142,11 @@
       }
       function encodeCP1252(s) {
           return s && s.replace(/./g, function(c) {
-              if (decodeCP1252Map[c]) throw("U+" + decodeUnicode(c) + " isn't a CP-1252 character.");
-              return encodeCP1252Map[c] || c;
+              var code = encodeCP1252Map[c];
+              if ((!code && c.charCodeAt(0) > 0xFF) || decodeCP1252Map[c]) {
+                  throw("U+" + decodeUnicode(c) + " isn't a CP-1252 character.");
+              }
+              return code || c;
           });
       }
       function updateCodes() {
