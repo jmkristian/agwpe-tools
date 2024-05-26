@@ -31,13 +31,6 @@
       }
     </style>
     <script type="text/javascript">
-      var textCodes = null;
-      var textBox = null;
-      var utf8Box = null;
-      var latin1Box = null;
-      var cp1252Box = null;
-      var latin1Codes = null;
-      var cp1252Codes = null;
       var encodeHexDigit = {
           '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
           a: 0xa, b: 0xb, c: 0xc, d: 0xd, e: 0xe, f: 0xf,
@@ -82,7 +75,11 @@
       }(decodeCP1252Map);
 
       function decodeUtf8(s) {
-          return decodeURIComponent(escape(s));
+          try {
+              return decodeURIComponent(escape(s));
+          } catch(err) {
+              throw(decodeHex(s) + " isn't UTF-8.");
+          }
       }
       function encodeUtf8(s) {
           return unescape(encodeURIComponent(s));
@@ -117,9 +114,6 @@
           if (!b0) throw("'" + text + "' doesn't contain an even number of hexadecimal digits.");
           return into;
       }
-      function fromUniHex(text) {
-          return text ? String.fromCharCode(parseInt(text, 16)) : text;
-      }
       function decodeUnicode(text) {
           return text && text.replace(/./g, function(c) {
               return ' ' + (c.charCodeAt(0) + 0x100000).toString(16).substring(2);
@@ -149,128 +143,125 @@
               return code || c;
           });
       }
-      function updateCodes() {
-          textCodes.value = decodeUnicode(textBox.value);
-          latin1Codes.value = decodeUnicode(latin1Box.value);
-          cp1252Codes.value = decodeUnicode(cp1252Box.value);
-      }
-      function onInputTextBox(event) {
-          var utf8 = encodeUtf8(textBox.value);
-          setTimeout(function() {
-              utf8Box.value = decodeHex(utf8);
-              latin1Box.value = decodeLatin1(utf8);
-              cp1252Box.value = decodeCP1252(utf8);
-              updateCodes();
-          }, 10);
-      }
-      function onChangeTextBox(event) {
-          var utf8 = encodeUtf8(textBox.value);
-          setUtf8Box(decodeHex(utf8));
-          setTimeout(function() {
-              if (utf8) {
-                  if (event) { // The user edited the textBox.
-                      latin1Box.focus();
-                      latin1Box.select();
-                  } else { // The user clicked a cell in the chart.
-                      textBox.focus();
-                      textBox.select();
+
+      var boxes = {}; // all the editable boxes
+      var bytes = ''; // the encoding of all the editable boxes
+
+      /** Something changed. Update everything else. */
+      function updateFrom(event) {
+          var errors = [];
+          var fromBox = event.currentTarget;
+          var encode = boxes[fromBox.id].encode;
+          if (!encode) throw('The ' + fromBox.id + ' has no encoder.');
+          var bytes = encode(fromBox.value);
+          for (var id in boxes) {
+              var into = boxes[id];
+              var value = '';
+              if (into.box === fromBox) { // no point updating yourself
+                  value = into.box.value;
+              } else {
+                  if (into.decode) {
+                      try {
+                          value = into.decode(bytes);
+                      } catch(err) {
+                          errors.push(err);
+                      }
+                  } else {
+                      errors.push('The ' + id + ' has no decoder.');
+                  }
+                  if (into.box.value != value) {
+                      into.box.value = value;
                   }
               }
-          }, 10);
-      }
-      function setUtf8Box(newValue) {
-          if (utf8Box.value != newValue) {
-              utf8Box.value = newValue;
-          }
-          var utf8 = encodeHex(newValue);
-          latin1Box.value = decodeLatin1(utf8);
-          cp1252Box.value = decodeCP1252(utf8);
-          updateCodes();
-          try {
-              var newText = decodeUtf8(utf8);
-              setTimeout(function() {
-                  textBox.value = newText;
-                  textCodes.value = decodeUnicode(textBox.value);
-                  if (newText) {
-                      textBox.focus();
-                      textBox.select();
+              if (into.codes) {
+                  var codes = decodeUnicode(value);
+                  if (into.codes.value != codes) {
+                      into.codes.value = codes;
                   }
-              }, 10);
-          } catch(err) {
-              throw("'" + utf8Box.value.replace(/\s*/g, '') + "' isn't UTF-8.");
+              }
           }
+          if (errors.length > 0) throw(errors);
+          else return boxes[fromBox.id];
       }
-      function onChangeUtf8Box(event) {
+      function onInput(event) {
           try {
-              setUtf8Box(event.currentTarget.value);
+              updateFrom(event);
           } catch(err) {
-              utf8Box.focus();
-              alert(err);
+              // Don't annoy the user by showing errors or shifting focus.
+              // But log the errors. They might be useful to a developer.
+              if (Array.isArray(err)) {
+                  err.forEach(console.log);
+              } else {
+                  console.log(err);
+              }
           }
       }
-      function onChangeLatin1Box(event) {
+      function onChange(event) {
           try {
-              var newValue = event.currentTarget.value;
-              latin1Codes.value = decodeUnicode(newValue);
-              setUtf8Box(decodeHex(encodeLatin1(newValue)));
+              var box = updateFrom(event);
+              var nextFocus = event.w6jmkNextFocus || box.nextFocus;
+              if (nextFocus) {
+                  nextFocus.focus();
+                  nextFocus.select(); // makes it easy to copy or cut
+              }
           } catch(err) {
-              latin1Box.focus();
-              alert(err);
+              if (Array.isArray(err)) {
+                  alert(err.join('\r'));
+              } else {
+                  alert(err);
+              }
           }
-      }
-      function onChangeCP1252Box(event) {
-          try {
-              var newValue = event.currentTarget.value;
-              cp1252Codes.value = decodeUnicode(newValue);
-              setUtf8Box(decodeHex(encodeCP1252(newValue)));
-          } catch(err) {
-              cp1252Box.focus();
-              alert(err);
-          }
-      }
-      function valueOfTD(TD) {
-          return fromUniHex(TD.getAttribute('_ucode')) || TD.innerText;
       }
       function onClickTD(event) {
-          textBox.value = textBox.value + valueOfTD(event.currentTarget);
-          onChangeTextBox();
+          var TD = event.currentTarget;
+          var ucode = TD.getAttribute('_ucode');
+          var value = ucode ? String.fromCharCode(parseInt(ucode, 16)) : TD.innerText;
+          var textBox = boxes.textBox.box;
+          textBox.value = (textBox.value || '') + value;
+          onChange({currentTarget: boxes.textBox.box, w6jmkNextFocus: textBox});
       }
-      function clearOtherBoxes(event) {
-          var targetId = event.currentTarget.id;
-          [textCodes, textBox, utf8Box, latin1Box, latin1Codes, cp1252Box, cp1252Codes]
-              .forEach(function(box) {
-                  if (box.id != targetId) box.value = '';
-              });
+      function focusToTextBox(event) {
+          var nextFocus = boxes.textBox.box;
+          if (nextFocus) {
+              nextFocus.focus();
+              nextFocus.select(); // makes it easy to copy or cut
+          }
       }
       window.onload = function() {
-          textCodes = document.getElementById("textCodes");
-          textBox = document.getElementById("textBox");
-          utf8Box = document.getElementById("utf8Box");
-          latin1Box = document.getElementById("latin1Box");
-          cp1252Box = document.getElementById("cp1252Box");
-          latin1Codes = document.getElementById("latin1Codes");
-          cp1252Codes = document.getElementById("cp1252Codes");
-
-          textBox.addEventListener('input', onInputTextBox);
-          textBox.addEventListener('change', onChangeTextBox);
-          utf8Box.addEventListener('change', onChangeUtf8Box);
-          latin1Box.addEventListener('change', onChangeLatin1Box);
-          cp1252Box.addEventListener('change', onChangeCP1252Box);
-          [textCodes, utf8Box, latin1Box, cp1252Box].forEach(function(box) {
-              box.addEventListener('input', clearOtherBoxes);
+          ["textBox", "byteBox", "latin1Box", "cp1252Box"].forEach(function(id) {
+              var box = document.getElementById(id);
+              boxes[id] = {box: box};
+              box.addEventListener('input', onInput);
+              box.addEventListener('change', onChange);
           });
+          boxes.textBox.encode = encodeUtf8;
+          boxes.textBox.decode = decodeUtf8;
+          boxes.textBox.nextFocus = boxes.byteBox.box;
+          boxes.textBox.codes = document.getElementById("textCodes");
+
+          boxes.byteBox.encode = encodeHex;
+          boxes.byteBox.decode = decodeHex;
+          boxes.byteBox.nextFocus = boxes.textBox.box;
+
+          boxes.latin1Box.encode = encodeLatin1;
+          boxes.latin1Box.decode = decodeLatin1;
+          boxes.latin1Box.nextFocus = boxes.textBox.box;
+          boxes.latin1Box.codes = document.getElementById("latin1Codes");
+
+          boxes.cp1252Box.encode = encodeCP1252;
+          boxes.cp1252Box.decode = decodeCP1252;
+          boxes.cp1252Box.nextFocus = boxes.textBox.box;
+          boxes.cp1252Box.codes = document.getElementById("cp1252Codes");
+
           var TDs = document.querySelectorAll('table#chart td');
           for (var t = 0; t < TDs.length; ++t) {
-              var TD = TDs[t];
-              TD.addEventListener('click', onClickTD);
-              // TD.addEventListener('mouseenter', onEnterTD);
+              TDs[t].addEventListener('click', onClickTD);
           }
           TDs = document.querySelectorAll('table#chart td.undefined');
           for (var t = 0; t < TDs.length; ++t) {
-              var TD = TDs[t];
-              TD.title = "This code doesn't represent a character.";
-              // TD.addEventListener('mouseenter', onEnterTD);
+              TDs[t].title = "This code doesn't represent a character.";
           }
+          boxes.textBox.box.focus();
       };
     </script>
   </head>
@@ -286,17 +277,18 @@
           <input type="text" id="textCodes" style="width:11em;" disabled="true"
                  placeholder="Unicodes"/>
         </td>
-        <td><a target="_blank" href="https://en.wikipedia.org/wiki/UTF-8">UTF-8</a></td>
+        <td><a target="_blank" href="https://en.wikipedia.org/wiki/UTF-8"
+               tabindex="5" onfocus="focusToTextBox">UTF-8</a></td>
         <td>
-          <input type="text" id="utf8Box" style="width:18em;" tabindex="4"
+          <input type="text" id="byteBox" style="width:18em;" tabindex="4"
                  placeholder="bytes"/>
         </td>
       </tr><tr>
         <td>
           <input type="text" id="latin1Box" style="width:15em;" tabindex="2"
-                 placeholder="transcoded from UTF-8"/>
+                 placeholder="decoded from UTF-8 bytes"/>
         </td>
-        <td><a target="_blank" href="https://en.wikipedia.org/wiki/ISO/IEC_8859-1">ISO 8859-1</a></td>
+        <td><a target="_blank" tabindex="-1" href="https://en.wikipedia.org/wiki/ISO/IEC_8859-1">ISO 8859-1</a></td>
         <td>
           <input type="text" id="latin1Codes" style="width:18em;" disabled="true"
                  placeholder="Unicodes"/>
@@ -304,9 +296,9 @@
       </tr><tr>
         <td>
           <input type="text" id="cp1252Box" style="width:15em;" tabindex="3"
-                 placeholder="transcoded from UTF-8"/>
+                 placeholder="decoded from UTF-8 bytes"/>
         </td>
-        <td><a target="_blank" href="https://en.wikipedia.org/wiki/Windows-1252">CP-1252</a></td>
+        <td><a target="_blank" tabindex="-1" href="https://en.wikipedia.org/wiki/Windows-1252">CP-1252</a></td>
         <td>
           <input type="text" id="cp1252Codes" style="width:18em;" disabled="true"
                  placeholder="Unicodes"/>
@@ -515,41 +507,43 @@
     </table>
     <p>
       This page converts between characters, bytes and
-      <a target="_blank" href="https://en.wikipedia.org/wiki/Unicode">Unicode</a> values.
+      <a target="_blank" tabindex="-1" href="https://en.wikipedia.org/wiki/Unicode">Unicode</a> values.
       <ul>
-        <li>The editable boxes in the <b>characters</b> column show the character glyphs.</li>
+        <li>The editable boxes in the <b>characters</b> column show characters (technically glyphs).</li>
         <li>The <b>encoding</b> column identifies a system of converting between characters and bytes.</li>
-        <li>The gray boxes show the Unicode values for the adjacent characters, in hexadecimal notation.
-        </li>
-        <li>The top right hand box shows the UTF-8 encoding of the top left box,
-          also in hexadecimal notation.
+        <li>The top right box shows the UTF-8 encoding of the top left box (in hexadecimal notation).</li>
+        <li>The gray boxes show the Unicode values for the adjacent characters (in hexadecimal notation).
         </li>
       </ul>
     </p><p>
-      The ISO 8859-1 and CP-1252 boxes in the <b>characters</b> column are transcoded from UTF-8.
-      For example, the CP-1252 box shows the result of decoding
-      the UTF-8 bytes as though they represent CP-1252 characters.
-    </p><p>
       The big table provides some sample characters.
-      You can hover your mouse cursor over some of them for an explanation.
       You can click on them to append characters to the UTF-8 box in the characters column.
       The other boxes will update accordingly.
     </p><p>
       You can copy-n-paste between the boxes and other software, as usual.
-      The characters should be transferred correctly, if the software supports Unicode.
-      But don't copy-n-paste from the characters in the big table.
-      This doesn't always work,
-      because your browser copies the wrong character into the clipboard.
+      The characters should be transferred correctly if the software supports Unicode.
+      But don't copy-n-paste from the characters in the big table:
+      in some cases your browser will copy the wrong character into the clipboard.
       It's better to click a character in the big table and then copy from the top left box.
     </p><p>
       You can type into any of the boxes that aren't gray.
       Then click or tab somewhere else, and the other boxes will update to match.
       A message pops up when you enter something that can't be converted to another representation.
     </p><p>
+      The ISO 8859-1 and CP-1252 boxes in the <b>characters</b> column are decoded
+      from the bytes in the UTF-8 row.
+      For example, the CP-1252 box shows the result of decoding the UTF-8 bytes
+      as though they represent CP-1252 characters.
+      To see what characters are represented by bytes, type the bytes into the UTF-8 row.
+    </p><p>
       The <code>008</code> and <code>009</code> rows in the big table are interesting.
-      Most of these bytes represent different characters in ISO 8859-1 and CP-1252.
-      The characters might look similar, but in the adjacent gray boxes you can see
-      they're different Unicode values.
+      Many of these codes represent printable characters in CP-1252 but not in ISO 8859-1.
+      Some of them represent characters in both encodings that look similar,
+      but they're different Unicode values.
+      You can see the different values in the gray boxes for each encoding.
+    </p><p>
+      Some of the characters in the big table have explanations,
+      which you can see by hovering your mouse cursor over them.
     </p>
   </body>
 </html>
