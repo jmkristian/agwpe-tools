@@ -54,8 +54,8 @@ var defaultPath = normalizePath(args['via']);
 const terminal = new Lines(process.stdout, ESC, log);
 process.stdin.pipe(terminal);
 var commandMode = true;
-const commandPrompt = 'cmd:';
-const dataPrompt = 'data:';
+const commandPrompt = 'cmd: ';
+var dataPrompt = 'send: ';
 var hasEscaped = false;
 var connection = null;
 var remoteAddress = null;
@@ -459,6 +459,7 @@ function execute(command) {
 
 function unproto(parts) {
     remoteAddress = validateCallSign('remote', parts[1]);
+    dataPrompt = `send >${remoteAddress}: `;
     const via = viaOption(remoteAddress, parts);
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
@@ -468,6 +469,7 @@ function unproto(parts) {
 
 function connect(parts) {
     remoteAddress = validateCallSign('remote', parts[1]);
+    dataPrompt = `send >${remoteAddress}: `;
     const via = viaOption(remoteAddress, parts);
     const viaNote = via ? ` via ${via}` : '';
     connection = allConnections[remoteAddress];
