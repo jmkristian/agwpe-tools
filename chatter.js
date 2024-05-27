@@ -42,6 +42,7 @@ const terminal = new Lines(process.stdout, ESC, log);
 process.stdin.pipe(terminal);
 var commandMode = true;
 const commandPrompt = 'cmd:';
+const dataPrompt = 'data:';
 var hasEscaped = false;
 var connection = null;
 var pathTo = {};
@@ -237,7 +238,7 @@ function setCommandMode(newMode) {
         }
         commandMode = newMode;
     }
-    terminal.prompt(commandMode ? commandPrompt : '');
+    terminal.prompt(commandMode ? commandPrompt : dataPrompt);
 }
 
 function initialize() {
