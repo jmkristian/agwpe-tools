@@ -344,7 +344,8 @@ function restartServer() {
 
 function getPathTo(remoteAddress) {
     var path = pathTo[remoteAddress];
-    return (path != null) ? path : bestPathTo[remoteAddress] || defaultPath;
+    var best = bestPathTo[remoteAddress];
+    return (path != null) ? path : best ? best.path : defaultPath;
 }
 
 function viaOption(remoteAddress, parts) {
@@ -381,7 +382,7 @@ function onPacket(packet) {
 function execute(command) {
     log.trace(`cmd:${command}`);
     terminal.writeLine(`${commandPrompt}${command}`);
-    var nextCommandMode = false;
+    var nextCommandMode = true;
     try {
         const parts = command.trim().split(/\s+/);
         switch(parts[0].toLowerCase()) {
@@ -390,10 +391,12 @@ function execute(command) {
         case 'u':
         case 'ui':
         case 'unproto':
+            nextCommandMode = false;
             unproto(parts);
             break;
         case 'c':
         case 'connect':
+            nextCommandMode = false;
             connect(parts);
             break;
         case 'd':
@@ -412,25 +415,20 @@ function execute(command) {
             }
             break;
         case 'via':
-            nextCommandMode = true;
             setVia(parts);
             break;
         case 'via?':
-            nextCommandMode = true;
             showVia(parts);
             break;
         case 'h':
         case 'hide':
-            nextCommandMode = true;
             hide(parts);
             break;
         case 's':
         case 'show':
-            nextCommandMode = true;
             show(parts);
             break;
         case 'hide?':
-            nextCommandMode = true;
             terminal.writeLine(
                 'hidden: '
                     + Object.keys(hiddenDestinations).map(function(s){return '>' + s;}).join(' ')
@@ -478,7 +476,6 @@ function execute(command) {
             ].forEach(function(line) {
                 terminal.writeLine(line);
             });
-            nextCommandMode = true;
         }
     } catch(err) {
         log.error(err);
@@ -548,6 +545,7 @@ function connect(parts) {
                 delete allConnections[remoteAddress];
                 if (connection === newConnection) {
                     connection = null;
+                    setCommandMode(true);
                 }
                 if (ending && Object.keys(allConnections).length <= 0) {
                     process.exit();
@@ -570,6 +568,7 @@ function disconnect(arg) {
     var remoteAddress = (arg || '').toUpperCase();
     if (!remoteAddress && connection) {
         remoteAddress = connection.remoteAddress.toUpperCase();
+        terminal.writeLine(`(Disconnecting from ${remoteAddress}.)`);
     }
     if (!remoteAddress) {
         terminal.writeLine(`(You're not connected.)`);
@@ -577,7 +576,7 @@ function disconnect(arg) {
         validateCallSign('remote', remoteAddress);
         var target = allConnections[remoteAddress];
         if (!target) {
-            terminal.writeLine(`(You haven't connected to ${remoteAddress}.)`);
+            terminal.writeLine(`(You're not connected to ${remoteAddress}.)`);
         } else {
             logLine(`>${remoteAddress} DISC`);
             target.end();
