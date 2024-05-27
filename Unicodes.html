@@ -146,6 +146,7 @@
 
       var boxes = {}; // all the editable boxes
       var bytes = ''; // the encoding of all the editable boxes
+      var errorColor = '#ffffcc';
 
       /** Something changed. Update everything else. */
       function updateFrom(event) {
@@ -159,12 +160,15 @@
               var value = '';
               if (into.box === fromBox) { // no point updating yourself
                   value = into.box.value;
+                  into.box.style.backgroundColor = null;
               } else {
                   if (into.decode) {
                       try {
                           value = into.decode(bytes);
+                          into.box.style.backgroundColor = null;
                       } catch(err) {
                           errors.push(err);
+                          into.box.style.backgroundColor = errorColor;
                       }
                   } else {
                       errors.push('The ' + id + ' has no decoder.');
@@ -507,43 +511,49 @@
     </table>
     <p>
       This page converts between characters, bytes and
-      <a target="_blank" tabindex="-1" href="https://en.wikipedia.org/wiki/Unicode">Unicode</a> values.
+      <a target="_blank" tabindex="-1" href="https://en.wikipedia.org/wiki/Unicode">Unicode</a>.
+      At the very top of the page:
       <ul>
-        <li>The editable boxes in the <b>characters</b> column show characters (technically glyphs).</li>
-        <li>The <b>encoding</b> column identifies a system of converting between characters and bytes.</li>
-        <li>The top right box shows the UTF-8 encoding of the top left box (in hexadecimal notation).</li>
-        <li>The gray boxes show the Unicode values for the adjacent characters (in hexadecimal notation).
+        <li>The boxes on the left show <b>characters</b> (technically glyphs).</li>
+        <li>The middle <b>encoding</b> column identifies
+          a system for converting between characters and bytes.</li>
+        <li>The top right box shows the bytes (in hexadecimal notation) that represent
+          the characters in the left column.</li>
+        <li>The gray boxes show the Unicode codes for the adjacent characters.
         </li>
       </ul>
     </p><p>
       The big table provides some sample characters.
-      You can click on them to append characters to the UTF-8 box in the characters column.
+      You can click on them to add characters to the top left box.
       The other boxes will update accordingly.
+      (To make this work, some browsers might ask you to 'allow active content'.)
     </p><p>
       You can copy-n-paste between the boxes and other software, as usual.
-      The characters should be transferred correctly if the software supports Unicode.
-      But don't copy-n-paste from the characters in the big table:
+      The characters will be transferred correctly, but <i>only if</i> the software supports Unicode.
+      Don't copy-n-paste from the characters in the big table:
       in some cases your browser will copy the wrong character into the clipboard.
-      It's better to click a character in the big table and then copy from the top left box.
+      It's better to click the character in the big table and then copy from the top left box.
     </p><p>
-      You can type into any of the boxes that aren't gray.
-      Then click or tab somewhere else, and the other boxes will update to match.
-      A message pops up when you enter something that can't be converted to another representation.
+      You can type or paste into any of the boxes that aren't gray.
+      The other boxes will update to match.
+      If you enter something that can't be converted,
+      some of the boxes will go blank, and
+      a message will pop up when you click or tab somewhere else.
     </p><p>
-      The ISO 8859-1 and CP-1252 boxes in the <b>characters</b> column are decoded
-      from the bytes in the UTF-8 row.
-      For example, the CP-1252 box shows the result of decoding the UTF-8 bytes
-      as though they represent CP-1252 characters.
-      To see what characters are represented by bytes, type the bytes into the UTF-8 row.
+      All the characters in the left column are decoded from the bytes in the top right box.
+      For example, the CP-1252 box shows the result of interpreting the bytes as CP-1252 characters.
+      So, you can type bytes into the top right box to see the characters they represent in each encoding.
     </p><p>
-      The <code>008</code> and <code>009</code> rows in the big table are interesting.
-      Many of these codes represent printable characters in CP-1252 but not in ISO 8859-1.
-      Some of them represent characters in both encodings that look similar,
-      but they're different Unicode values.
-      You can see the different values in the gray boxes for each encoding.
+      The big table is organized by Unicode code.
+      For example, the code for '$' is 0024 and the code for the copyright symbol '&#x00A9;' is 00A9.
+      The 008 and 009 rows are unusual.
+      Many of these codes represent printable characters in CP-1252 but not other encodings.
+      Some of them represent characters in several encodings that look similar,
+      but they have different codes in Unicode.
+      You can see the different codes in the gray boxes.
     </p><p>
       Some of the characters in the big table have explanations,
-      which you can see by hovering your mouse cursor over them.
+      which you can see by hovering your mouse over them.
     </p>
   </body>
 </html>
