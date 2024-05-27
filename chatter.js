@@ -29,14 +29,27 @@ const port = args.port || args.p || 8000;
 const showControls = args['show-controls'];
 const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
+const allRemoteEOLs = new RegExp(remoteEOL, 'g');
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const verbose = args.verbose || args.v;
 const showTime = args['show-time'];
 
 var allConnections = {};
 var bestPathTo = {};
+var pathTo = {};
 var myCall = '';
 var tncPort = 0;
+
+function pathLength(path) {
+    return path ? path.split(/[\s,]+/).length : 0;
+}
+function normalizePath(p) {
+    return p && p.replace(/\s/g, '').replace(/,+/, ',').toUpperCase();
+}
+function validatePath(p) {
+    if (p) p.split(/[\s,]+/).forEach(function(c) {validateCallSign('repeater', c);});
+}
+var defaultPath = normalizePath(args['via']);
 
 const terminal = new Lines(process.stdout, ESC, log);
 process.stdin.pipe(terminal);
@@ -45,7 +58,6 @@ const commandPrompt = 'cmd:';
 const dataPrompt = 'data:';
 var hasEscaped = false;
 var connection = null;
-var pathTo = {};
 var remoteAddress = null;
 var server = null;
 var ending = false;
@@ -92,7 +104,7 @@ function parseVia(via) {
     result = '';
     for (var p = 0; p < parts.length; ++p) {
         if (result) result += ',';
-        result += validateCallSign('digipeater', parts[p].replace(/\*$/, ''));
+        result += validateCallSign('repeater', parts[p].replace(/\*$/, ''));
     }
     return result;
 }
@@ -138,29 +150,49 @@ function noteReturnPath(packet) {
         if (fromAddress == myCall) {
             return;
         }
-        // Construct a path from here to packet.fromAddress:
-        var newPath = [];
+        // Construct a path from here to fromAddress:
+        var newPath = '';
+        var newPathLength = 0;
         const via = packet.via;
-        if (via) for (var v = 0; v < via.length; ++v) {
-            var repeater = via[v];
-            if (repeater.endsWith('*')) { // This repeater forwarded this packet.
-                newPath.unshift(validateCallSign(
-                    'repeater', repeater.substring(0, repeater.length - 1)));
-            } else {
-                // We received this packet directly from newPath[0].
-                break; // Look no further.
+        if (via) {
+            for (var v = 0; v < via.length; ++v) {
+                var repeater = via[v];
+                if (repeater.endsWith('*')) { // This repeater forwarded this packet.
+                    newPath = validateCallSign(
+                        'repeater', repeater.substring(0, repeater.length - 1))
+                        + (newPath && ',' + newPath);
+                    ++newPathLength;
+                } else {
+                    // We received this packet directly from the last repeater (if any).
+                    break; // Look no further.
+                }
             }
         }
-        var item = bestPathTo[fromAddress];
-        if (item == null || newPath.length < item.path.length) {
+        const best = bestPathTo[fromAddress];
+        if (!best || (newPath != best.path && newPathLength <= pathLength(best.path))) {
             bestPathTo[fromAddress] = {path: newPath, counter: 1};
-        } else if (arraysEqual(newPath, item.path)) {
-            ++item.counter;
+        } else if (newPath == best.path) {
+            best.counter++;
+            if ([4, 8, 16, 32].indexOf(best.counter) >= 0) {
+                var current = pathTo[fromAddress];
+                if (current != null && current != best.path) {
+                    if (best.path) {
+                        terminal.writeLine(
+                            `(It looks like sending to ${fromAddress} via ${best.path} would be better than via ${current}.)`
+                        );
+                    } else {
+                        terminal.writeLine(
+                            `(It looks like sending to ${fromAddress} directly would be better than via ${current}.)`
+                        );
+                    }
+                }
+            }
+        } else {
+            log.error(`${newPath} != ${best.path}.)`);
         }
     } catch(err) {
         log.warn(err);
     }
-    return null;
 }
 
 function pad2(n) {
@@ -309,24 +341,21 @@ function restartServer() {
 } // restartServer
 
 function getPathTo(remoteAddress) {
-    var best = bestPathTo[remoteAddress];
     var path = pathTo[remoteAddress];
-    if (path == null) {
-        if (best) path = best.path.join(',');
-    } else if (best && best.path.length < path.split(/[\s,]+/).length
-               && [4, 8, 16, 32].indexOf(best.counter) >= 0) {
-        terminal.writeLine(`(${best.path.join(',')} looks like a better path than ${path}.)`);
-    }
-    log.trace('getPathTo(%s) = %s', remoteAddress, path);
-    return path;
+    return (path != null) ? path : bestPathTo[remoteAddress] || defaultPath;
 }
 
-function setPathTo(remoteAddress, path) {
-    log.trace('setPathTo(%s, %s)', remoteAddress, path);
-    if (path != null) {
+function viaOption(remoteAddress, parts) {
+    // A command line like "c a6call via" specifies no repeaters.
+    // But "c a6call" means use pathTo or besPathTo.
+    if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
+        return getPathTo(remoteAddress);
+    } else {
+        var path = normalizePath(parts[3]);
+        validatePath(path);
         pathTo[remoteAddress] = path;
+        return path;
     }
-    return path;
 }
 
 function onPacket(packet) {
@@ -345,16 +374,6 @@ function onPacket(packet) {
     }
 }
 
-function viaOption(remoteAddress, parts) {
-    // A command line like "c a6call via" specifies no repeaters.
-    // But "c a6call" means use a recent path or the best observed path.
-    if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
-        return getPathTo(remoteAddress);
-    } else {
-        return setPathTo(remoteAddress, parseVia(parts[3]) || '');
-    }
-}
-
 function execute(command) {
     log.trace(`cmd:${command}`);
     var nextCommandMode = false;
@@ -370,7 +389,6 @@ function execute(command) {
             break;
         case 'c':
         case 'connect':
-            nextCommandMode = true;
             connect(parts);
             break;
         case 'd':
@@ -387,6 +405,14 @@ function execute(command) {
             if (verbose) {
                 terminal.writeLine(`(Communicating via TNC port ${tncPort}.)`);
             }
+            break;
+        case 'via':
+            nextCommandMode = true;
+            setVia(parts);
+            break;
+        case 'via?':
+            nextCommandMode = true;
+            showVia(parts);
             break;
         case 'b':
         case 'bye':
@@ -406,6 +432,15 @@ function execute(command) {
                 "          : Disconnect from that call sign or (with",
                 "          : no call sign) disconnect from the station",
                 "          : to which you're currently connected.",
+                "Via [repeater,...]",
+                "          : Set the default list of digipeaters via",
+                "          : which to communicate with a new station.",
+                "          : If you don't list any digipeaters, the",
+                "          : default will be to communicate directly.",
+                "Via? [call sign]",
+                "          : Show the current and default digipeaters",
+                "          : via which to communicate with that call sign",
+                "          : or (with no call sign) a new call sign.",
                 "P[ort] <number>",
                 "          : Send and receive data via that AGWPE port.",
                 "B[ye]",
@@ -467,12 +502,11 @@ function connect(parts) {
         });
         ['end'].forEach(function(event) {
             newConnection.on(event, function(info) {
-                if (info) {
-                    logLine(
-                        '(' + escapify(shared.decode(info, remoteEncoding)) + ')');
-                } else if (verbose) {
-                    logLine(`(Disconnected from ${remoteAddress}.)`);
-                }
+                const message = shared.decode(
+                    showEOL ? info : !info ? ''
+                        : info.toString('binary').replace(allRemoteEOLs, ''),
+                    remoteEncoding);
+                logLine(message ? message : `(Disconnected from ${remoteAddress}.)`);
                 delete allConnections[remoteAddress];
                 if (connection === newConnection) {
                     connection = null;
@@ -513,6 +547,65 @@ function disconnect(arg) {
     }
 } // disconnect
 
+function setVia(parts) {
+    defaultPath = parts[1] && normalizePath(parts[1]);
+    validatePath(defaultPath);
+}
+
+function showVia(parts) {
+    if (parts[1] == '*') {
+        terminal.writeLine('pathTo: ' + JSON.stringify(pathTo));
+        terminal.writeLine('bestPathTo: ' + JSON.stringify(bestPathTo));
+        terminal.writeLine('defaultPath: ' + defaultPath);
+        return;
+    }
+    const remoteAddress = parts[1] && validateCallSign('remote', parts[1]);
+    var messages = [];
+    if (remoteAddress) {
+        const path = pathTo[remoteAddress];
+        if (path != null) {
+            if (path) {
+                messages.push(`The default path to ${remoteAddress} is ${path}.`);
+            } else {
+                messages.push(`The default is to send directly to ${remoteAddress}, without digipeaters.`);
+            }
+        }
+        const bestPath = bestPathTo[remoteAddress];
+        if (bestPath && bestPath.path != null) {
+            if (path == null) {
+                if (bestPath.path) {
+                    messages.push(`The default path to ${remoteAddress} is ${bestPath.path}.`);
+                } else {
+                    messages.push(`The default is to send directly to ${remoteAddress}, without digipeaters.`);
+                }
+            } else if (bestPath.counter >= 4
+                       && pathLength(bestPath.path) <= pathLength(path)) {
+                if (bestPath.path) {
+                    messages.push(`It looks like it would be better to communicate`
+                                  + ` with ${remoteAddress} via ${bestPath.path}.`);
+                } else {
+                    messages.push(
+                        `It looks like it would be better to communicate`
+                            + ` with ${remoteAddress} directly, without digipeaters.`);
+                }
+            }
+        }
+    }
+    if (defaultPath) {
+        messages.push(`The default path to a new station is ${defaultPath}.`);
+    }
+    if (messages.length) {
+        messages.forEach(function(message, m) {
+            var line = (m == 0 ? '( ' : '  ')
+                + message
+                + (m == messages.length - 1 ? ')' : '');
+            terminal.writeLine(line);
+        });
+    } else {
+        terminal.writeLine('(The default is to communicate directly, without digipeaters.)');
+    }
+}
+
 function bye() {
     try {
         for (var remoteAddress in allConnections) {
@@ -533,6 +626,7 @@ try {
     tncPort = AGWPE.validatePort(args['tnc-port'] || args.tncport || 0);
     myCall = validateCallSign('local', args._[0]);
     shared.validateEncoding(remoteEncoding);
+    validatePath(defaultPath);
     remoteAddress = args._[1] ? validateCallSign('remote', args._[1]) : null;
     if (ESC && ESC.length > 1) {
         throw shared.newError(
