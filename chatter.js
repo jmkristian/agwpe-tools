@@ -12,7 +12,7 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'trace', 'verbose', 'v'],
+    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'show-timestamp', 'timestamp', 'trace', 'verbose', 'v'],
     'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
 });
 const log = Bunyan.createLogger({
@@ -32,13 +32,15 @@ const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const verbose = args.verbose || args.v;
-const showTime = args['show-time'];
+const showTime = args['show-time'] || args['show-timestamp'] || args['timestamp'];
 
 var allConnections = {};
 var bestPathTo = {};
 var pathTo = {};
 var myCall = '';
 var tncPort = 0;
+var hiddenSources = {};
+var hiddenDestinations = {};
 
 function pathLength(path) {
     return path ? path.split(/[\s,]+/).length : 0;
@@ -187,8 +189,6 @@ function noteReturnPath(packet) {
                     }
                 }
             }
-        } else {
-            log.error(`${newPath} != ${best.path}.)`);
         }
     } catch(err) {
         log.warn(err);
@@ -287,6 +287,7 @@ function initialize() {
                         '>' + connection.remoteAddress
                             + ' I ' + escapify(line + (showEOL ? remoteEOL : '')));
                 });
+                setCommandMode(false);
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
                 socket.send({
@@ -302,6 +303,7 @@ function initialize() {
                             + (via ? ' via ' + via : '')
                             + ' UI ' + escapify(line + (showEOL ? remoteEOL : '')));
                 });
+                setCommandMode(false);
             } else {
                 terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
                 setCommandMode(true);
@@ -363,10 +365,12 @@ function onPacket(packet) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (verbose
-                || (!isRepetitive(packet) // Call this first for its side effect.
-                    && (packet.type == 'I' || packet.type == 'UI'))) {
-                summarize(packet);
+            if (verbose || packet.type == 'I' || packet.type == 'UI') {
+                if (!(isRepetitive(packet) // Call this first for its side effect.
+                      || hiddenSources[packet.fromAddress]
+                      || hiddenDestinations[packet.toAddress])) {
+                    summarize(packet);
+                }
             }
         }
     } catch(err) {
@@ -376,6 +380,7 @@ function onPacket(packet) {
 
 function execute(command) {
     log.trace(`cmd:${command}`);
+    terminal.writeLine(`${commandPrompt}${command}`);
     var nextCommandMode = false;
     try {
         const parts = command.trim().split(/\s+/);
@@ -414,6 +419,23 @@ function execute(command) {
             nextCommandMode = true;
             showVia(parts);
             break;
+        case 'h':
+        case 'hide':
+            nextCommandMode = true;
+            hide(parts);
+            break;
+        case 's':
+        case 'show':
+            nextCommandMode = true;
+            show(parts);
+            break;
+        case 'hide?':
+            nextCommandMode = true;
+            terminal.writeLine(
+                'hidden: '
+                    + Object.keys(hiddenDestinations).map(function(s){return '>' + s;}).join(' ')
+                    + ' ' + Object.keys(hiddenSources).map(function(s){return '<' + s;}).join(' '));
+            break;
         case 'b':
         case 'bye':
             bye();
@@ -422,13 +444,13 @@ function execute(command) {
             terminal.writeLine(command + '?');
             [
                 "The available commands are:",
-                "U[nproto] <call sign> [via <call sign>,...]",
+                "U[nproto] callsign [via callsign,...]",
                 "          : Send the following data in UI packets",
                 "          : to that call sign via those digipeaters.",
-                "C[onnect] <call sign> [via <call sign>,...]",
+                "C[onnect] callsign [via callsign,...]",
                 "          : Send the following data in a connection",
                 "          : to that call sign via those digipeaters.",
-                "D[isconnect] [call sign]",
+                "D[isconnect] [callsign]",
                 "          : Disconnect from that call sign or (with",
                 "          : no call sign) disconnect from the station",
                 "          : to which you're currently connected.",
@@ -437,11 +459,19 @@ function execute(command) {
                 "          : which to communicate with a new station.",
                 "          : If you don't list any digipeaters, the",
                 "          : default will be to communicate directly.",
-                "Via? [call sign]",
+                "Via? [callsign]",
                 "          : Show the current and default digipeaters",
                 "          : via which to communicate with that call sign",
                 "          : or (with no call sign) a new call sign.",
-                "P[ort] <number>",
+                "H[ide] [<callsign >callsign ...]",
+                "          : Stop displaying some received data.",
+                "          : <callsign means data sent from that call sign.",
+                "          : >callsign means data sent to that call sign.",
+                "S[how] [<callsign >callsign ...]",
+                "          : Resume displaying some received data.",
+                "          : <callsign means data sent from that call sign.",
+                "          : >callsign means data sent to that call sign.",
+                "P[ort] number",
                 "          : Send and receive data via that AGWPE port.",
                 "B[ye]",
                 "          : Close all connections and exit.",
@@ -457,9 +487,15 @@ function execute(command) {
     setCommandMode(nextCommandMode);
 } // execute
 
+function startSendingTo(remoteAddress) {
+    dataPrompt = `send >${remoteAddress}: `;
+    delete hiddenSources[remoteAddress];
+    delete hiddenDestinations[remoteAddress];
+}
+
 function unproto(parts) {
     remoteAddress = validateCallSign('remote', parts[1]);
-    dataPrompt = `send >${remoteAddress}: `;
+    startSendingTo(remoteAddress);
     const via = viaOption(remoteAddress, parts);
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
@@ -469,7 +505,7 @@ function unproto(parts) {
 
 function connect(parts) {
     remoteAddress = validateCallSign('remote', parts[1]);
-    dataPrompt = `send >${remoteAddress}: `;
+    startSendingTo(remoteAddress);
     const via = viaOption(remoteAddress, parts);
     const viaNote = via ? ` via ${via}` : '';
     connection = allConnections[remoteAddress];
@@ -605,6 +641,38 @@ function showVia(parts) {
         });
     } else {
         terminal.writeLine('(The default is to communicate directly, without digipeaters.)');
+    }
+}
+
+function hide(parts) {
+    for (var p = 1; p < parts.length; ++p) {
+        var part = parts[p];
+        switch(part.charAt(0)) {
+        case '<':
+            hiddenSources[validateCallSign('source', part.substring(1))] = true;
+            break;
+        case '>':
+            hiddenDestinations[validateCallSign('destination', part.substring(1))] = true;
+            break;
+        default:
+            terminal.writeLine(`Do you mean >${part} (destination) or <${part} (source)?`);
+        }
+    }
+}
+
+function show(parts) {
+    for (var p = 1; p < parts.length; ++p) {
+        var part = parts[p];
+        switch(part.charAt(0)) {
+        case '<':
+            delete hiddenSources[validateCallSign('source', part.substring(1))];
+            break;
+        case '>':
+            delete hiddenDestinations[validateCallSign('destination', part.substring(1))];
+            break;
+        default:
+            terminal.writeLine(`Do you mean >${part} (to) or <${part} (from)?`);
+        }
     }
 }
 
