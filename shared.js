@@ -188,7 +188,9 @@ const specialWindows1252 = new RegExp('[' + Object.keys(encodeWindows1252).join(
 
 /** Decode a string from a Buffer. */
 function decode(buffer, encoding) {
-    if (encoding == 'windows-1252') {
+    if (!buffer) {
+        return buffer;
+    } else if (encoding == 'windows-1252') {
         return buffer.toString('binary')
             .replace(/[\u0080-\u009F]/g, function(c) {
                 return decodeWindows1252[c] || c;
