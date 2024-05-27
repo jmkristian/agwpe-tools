@@ -4,7 +4,7 @@
     stdout. A simple command mode enables sending and receiving files.
  */
 "use strict";
-const AGWPE = require('../node-agwpe');
+const AGWPE = require('@jmkristian/node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
 const fs = require('fs');
