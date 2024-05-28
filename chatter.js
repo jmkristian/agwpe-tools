@@ -30,6 +30,7 @@ const showControls = args['show-controls'];
 const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
+const allOS_EOLs = new RegExp(OS.EOL, 'g');
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const verbose = args.verbose || args.v;
 const showTime = args['show-time'] || args['show-timestamp'] || args['timestamp'];
@@ -53,11 +54,10 @@ function validatePath(p) {
 }
 var defaultPath = normalizePath(args['via']);
 
-const terminal = new Lines(process.stdout, ESC, log);
-process.stdin.pipe(terminal);
+const terminal = new Lines(ESC);
 var commandMode = true;
 const commandPrompt = 'cmd: ';
-var dataPrompt = 'send: ';
+var dataPrompt = '>?: ';
 var hasEscaped = false;
 var connection = null;
 var remoteAddress = null;
@@ -273,24 +273,35 @@ function setCommandMode(newMode) {
     terminal.prompt(commandMode ? commandPrompt : dataPrompt);
 }
 
+function toRemoteLine(line) {
+    return Buffer.from(
+        shared.encode(line, remoteEncoding).toString('binary') + remoteEOL,
+        'binary');
+}
+
+function logDataSent(packetType, lines, remoteAddress, via) {
+    const marker = `>${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `
+    lines.split(allOS_EOLs).forEach(function(line) {
+        logLine(marker + escapify(line));
+    });
+}
+
 function initialize() {
-    setCommandMode (!remoteAddress);
-    terminal.on('escape', function() {setCommandMode(!commandMode);});
+    setCommandMode(!remoteAddress);
+    terminal.on('escape', function() {
+        if (commandMode && !(connection || remoteAddress)) {
+            terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
+        } else {
+            setCommandMode(!commandMode);
+        }
+    });
     terminal.on('line', function(line) {
         try {
-            const info = shared.encode(line + remoteEOL, remoteEncoding);
             if (commandMode) {
                 execute(line);
             } else if (connection) {
-                connection.write(info, function sent() {
-                    if (showEOL) {
-                        logLine('>' + connection.remoteAddress + ' I ' + escapify(line + remoteEOL));
-                    } else {
-                        line.split(allRemoteEOLs).forEach(function(part) {
-                            logLine('>' + connection.remoteAddress + ' I ' + part);
-                        });
-                    }
-                    setCommandMode(false);
+                connection.write(toRemoteLine(line), function sent() {
+                    logDataSent('I', line, connection.remoteAddress);
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
@@ -300,17 +311,12 @@ function initialize() {
                     toAddress: remoteAddress,
                     fromAddress: myCall,
                     via: via || undefined,
-                    info: info,
+                    info: toRemoteLine(line),
                 }, function sent() {
-                    logLine(
-                        '>' + remoteAddress
-                            + (via ? ' via ' + via : '')
-                            + ' UI ' + escapify(line + (showEOL ? remoteEOL : '')));
+                    logDataSent('UI', line, remoteAddress, via);
                 });
-                setCommandMode(false);
             } else {
                 terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
-                setCommandMode(true);
             }
         } catch(err) {
             log.error(err);
@@ -384,7 +390,7 @@ function onPacket(packet) {
 }
 
 function execute(command) {
-    log.trace(`cmd:${command}`);
+    log.debug('execute(%s)', command);
     terminal.writeLine(`${commandPrompt}${command}`);
     var nextCommandMode = true;
     try {
@@ -400,7 +406,6 @@ function execute(command) {
             break;
         case 'c':
         case 'connect':
-            nextCommandMode = false;
             connect(parts);
             break;
         case 'd':
@@ -438,6 +443,18 @@ function execute(command) {
                     + Object.keys(hiddenDestinations).map(function(s){return '>' + s;}).join(' ')
                     + ' ' + Object.keys(hiddenSources).map(function(s){return '<' + s;}).join(' '));
             break;
+        case 'x':
+        case 'xecute':
+        case 'execute':
+            if (parts.length < 2) {
+                terminal.writeLine('(What file do you want to execute?)');
+            } else {
+                // This crude parser doesn't have a syntax for quoted strings.
+                // This is a pretty good approximation:
+                parts.splice(0, 1);
+                terminal.readFile(parts.join(' '));
+            }
+            break;
         case 'b':
         case 'bye':
             bye();
@@ -473,6 +490,9 @@ function execute(command) {
                 "          : Resume displaying some received data.",
                 "          : <callsign means data sent from that call sign.",
                 "          : >callsign means data sent to that call sign.",
+                "X[ecute] file",
+                "          : Read that file and interpret it like input",
+                "          : that you typed.",
                 "P[ort] number",
                 "          : Send and receive data via that AGWPE port.",
                 "B[ye]",
@@ -488,31 +508,33 @@ function execute(command) {
     setCommandMode(nextCommandMode);
 } // execute
 
-function startSendingTo(remoteAddress) {
-    dataPrompt = `send >${remoteAddress}: `;
+function startSendingTo(remoteAddress, packetType) {
+    dataPrompt = `>${remoteAddress} ${packetType}: `;
     delete hiddenSources[remoteAddress];
     delete hiddenDestinations[remoteAddress];
+    setCommandMode(false);
 }
 
 function unproto(parts) {
-    remoteAddress = validateCallSign('remote', parts[1]);
-    startSendingTo(remoteAddress);
-    const via = viaOption(remoteAddress, parts);
+    const remote = validateCallSign('remote', parts[1]);
+    const via = viaOption(remote, parts);
+    remoteAddress = remote;
+    connection = null; // but it remains in allConnections.
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
-        terminal.writeLine(`(Transmit UI packets${viaNote} to ${remoteAddress}.)`);
+        terminal.writeLine(`(Will send UI packets${viaNote} to ${remoteAddress}.)`);
     }
+    startSendingTo(remoteAddress, 'UI');
 } // unproto
 
 function connect(parts) {
     remoteAddress = validateCallSign('remote', parts[1]);
-    startSendingTo(remoteAddress);
     const via = viaOption(remoteAddress, parts);
     const viaNote = via ? ` via ${via}` : '';
     connection = allConnections[remoteAddress];
     if (connection) {
         if (verbose) {
-            terminal.writeLine(`(Transmit I packets${viaNote} to ${remoteAddress}.)`);
+            terminal.writeLine(`(Will send I packets${viaNote} to ${remoteAddress}.)`);
         }
     } else {
         const options = {
@@ -526,6 +548,8 @@ function connect(parts) {
         terminal.writeLine(`(Connecting to ${remoteAddress}${viaNote}...)`);
         const newConnection = AGWPE.createConnection(options, function connected() {
             try {
+                terminal.writeLine(`(Connected to ${remoteAddress}${viaNote}.)`);
+                startSendingTo(remoteAddress, 'I');
                 connection = allConnections[remoteAddress] = newConnection;
                 connection.pipe(new Stream.Writable({
                     write: function _write(chunk, encoding, callback) {
@@ -533,28 +557,25 @@ function connect(parts) {
                         if (callback) callback();
                     },
                 }));
-                terminal.writeLine(`(Connected to ${remoteAddress}${viaNote}.)`);
-                setCommandMode(false);
             } catch(err) {
                 log.error(err);
             }
         });
-        ['end'].forEach(function(event) {
-            newConnection.on(event, function(info) {
-                const message = shared.decode(
-                    showEOL ? info : !info ? ''
-                        : info.toString('binary').replace(allRemoteEOLs, ''),
-                    remoteEncoding);
-                logLine(message ? message : `(Disconnected from ${remoteAddress}.)`);
-                delete allConnections[remoteAddress];
-                if (connection === newConnection) {
-                    connection = null;
-                    setCommandMode(true);
-                }
-                if (ending && Object.keys(allConnections).length <= 0) {
-                    process.exit();
-                }
-            });
+        newConnection.on('end', function(info) {
+            const message = shared.decode(
+                showEOL ? info : !info ? ''
+                    : info.toString('binary').replace(allRemoteEOLs, ''),
+                remoteEncoding);
+            logLine(message ? message : `(Disconnected from ${remoteAddress}.)`);
+            delete allConnections[remoteAddress];
+            if (connection === newConnection) {
+                connection = null;
+                dataPrompt = `>${remoteAddress} UI: `;
+                setCommandMode(true);
+            }
+            if (ending && Object.keys(allConnections).length <= 0) {
+                process.exit();
+            }
         });
         ['error', 'timeout'].forEach(function(event) {
             newConnection.on(event, function(err) {
@@ -569,15 +590,14 @@ function connect(parts) {
 } // connect
 
 function disconnect(arg) {
-    var remoteAddress = (arg || '').toUpperCase();
+    var remoteAddress = (arg || '');
     if (!remoteAddress && connection) {
-        remoteAddress = connection.remoteAddress.toUpperCase();
-        terminal.writeLine(`(Disconnecting from ${remoteAddress}.)`);
+        remoteAddress = connection.remoteAddress;
     }
     if (!remoteAddress) {
         terminal.writeLine(`(You're not connected.)`);
     } else {
-        validateCallSign('remote', remoteAddress);
+        remoteAddress = validateCallSign('remote', remoteAddress.toUpperCase());
         var target = allConnections[remoteAddress];
         if (!target) {
             terminal.writeLine(`(You're not connected to ${remoteAddress}.)`);
@@ -706,11 +726,14 @@ try {
             `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
             'ERR_INVALID_ARG_VALUE');
     }
-    log.debug('%s"', {
+    log.debug('%s', {
         verbose: verbose,
         myCall: myCall,
         tncPort: tncPort,
         remoteEOL: remoteEOL,
+    });
+    terminal.on('error', function(err) {
+        terminal.writeLine(err);
     });
     terminal.on('SIGTERM', process.exit);
     initialize();
