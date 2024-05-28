@@ -66,15 +66,15 @@ These programs work similarly on Linux and other platforms that support
 [node.js](https://nodejs.org/en/download/).
 To get started:
 
-1. [Clone](https://www.techrepublic.com/article/how-to-clone-github-repository/)
-   the [agwpe-tools](https://github.com/jmkristian/agwpe-tools) repository.
-2. Start a shell and `cd` into your clone.
-3. Get node.js version 8.17 or later.
+1. Get node.js version 8.17 or later.
    Check your current version by running the command `node --version`.
    If you don't have this command, [install node.js](https://nodejs.org/en/download/)
    and start a new shell.
    If you have an old version, you can use `nvm` to
    [install a new version](https://heynode.com/tutorial/install-nodejs-locally-nvm/).
+2. [Clone](https://www.techrepublic.com/article/how-to-clone-github-repository/)
+   the [agwpe-tools](https://github.com/jmkristian/agwpe-tools) repository.
+3. Start a shell and `cd` into your clone.
 4. Download node modules, by running the command `npm install`.
    Ignore messages about finding Python; they're harmless.
 5. Start your TNC (e.g. Direwolf).
