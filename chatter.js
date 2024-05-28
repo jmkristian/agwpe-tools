@@ -467,7 +467,7 @@ function execute(command) {
                 "          : Send the following data in UI packets to that call sign via",
                 "          : those digipeaters.",
                 "C[onnect] callsign [via callsign,...]",
-                "          : Send the following data in a connection to that call sign via.",
+                "          : Send the following data in a connection to that call sign via",
                 "          : those digipeaters.",
                 "D[isconnect] [callsign]",
                 "          : Disconnect from that call sign or (with no call sign) disconnect",
