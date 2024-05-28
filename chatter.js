@@ -57,7 +57,7 @@ var defaultPath = normalizePath(args['via']);
 const terminal = new Lines(ESC);
 var commandMode = true;
 const commandPrompt = 'cmd: ';
-var dataPrompt = '>?: ';
+var dataPrompt = '';
 var hasEscaped = false;
 var connection = null;
 var remoteAddress = null;
@@ -287,6 +287,7 @@ function logDataSent(packetType, lines, remoteAddress, via) {
 }
 
 function initialize() {
+    setDataPrompt();
     setCommandMode(!remoteAddress);
     terminal.on('escape', function() {
         if (commandMode && !(connection || remoteAddress)) {
@@ -464,37 +465,29 @@ function execute(command) {
             [
                 "The available commands are:",
                 "U[nproto] callsign [via callsign,...]",
-                "          : Send the following data in UI packets",
-                "          : to that call sign via those digipeaters.",
+                "          : Send the following data in UI packets to that call sign via",
+                "          : those digipeaters.",
                 "C[onnect] callsign [via callsign,...]",
-                "          : Send the following data in a connection",
-                "          : to that call sign via those digipeaters.",
+                "          : Send the following data in a connection to that call sign via.",
+                "          : those digipeaters.",
                 "D[isconnect] [callsign]",
-                "          : Disconnect from that call sign or (with",
-                "          : no call sign) disconnect from the station",
-                "          : to which you're currently connected.",
+                "          : Disconnect from that call sign or (with no call sign) disconnect",
+                "          : from the station to which you're currently connected.",
                 "Via [repeater,...]",
-                "          : Set the default list of digipeaters via",
-                "          : which to communicate with a new station.",
-                "          : If you don't list any digipeaters, the",
-                "          : default will be to communicate directly.",
+                "          : Set the default list of digipeaters via which to communicate with",
+                "          : a new station. If you don't list any digipeaters, the default",
+                "          : will be to communicate directly.",
                 "Via? [callsign]",
-                "          : Show the current and default digipeaters",
-                "          : via which to communicate with that call sign",
-                "          : or (with no call sign) a new call sign.",
-                "H[ide] [<callsign >callsign ...]",
-                "          : Stop displaying some received data.",
-                "          : <callsign means data sent from that call sign.",
-                "          : >callsign means data sent to that call sign.",
-                "S[how] [<callsign >callsign ...]",
-                "          : Resume displaying some received data.",
-                "          : <callsign means data sent from that call sign.",
-                "          : >callsign means data sent to that call sign.",
-                "X[ecute] file",
-                "          : Read that file and interpret it like input",
-                "          : that you typed.",
+                "          : Show the current and default digipeaters via which to communicate",
+                "          : with that call sign or (with no call sign) a new call sign.",
+                "H[ide] [<fromCall >toCall ...]",
+                "          : Stop showing data that were sent by fromCall or sent to toCall.",
+                "S[how] [<fromCall >toCall ...]",
+                "          : Resume showing data that were sent by fromCall or sent to toCall.",
+                "X[ecute] fileName",
+                "          : Read a file and interpret it like input that you type.",
                 "P[ort] number",
-                "          : Send and receive data via that AGWPE port.",
+                "          : Use that AGWPE port to send and receive data.",
                 "B[ye]",
                 "          : Close all connections and exit.",
             ].forEach(function(line) {
@@ -508,49 +501,60 @@ function execute(command) {
     setCommandMode(nextCommandMode);
 } // execute
 
-function startSendingTo(remoteAddress, packetType) {
-    dataPrompt = `>${remoteAddress} ${packetType}: `;
-    delete hiddenSources[remoteAddress];
-    delete hiddenDestinations[remoteAddress];
+function setDataPrompt() {
+    if (connection) {
+        dataPrompt = `>${connection.remoteAddress} I: `;
+    } else if (remoteAddress) {
+        dataPrompt = `>${remoteAddress} UI: `;
+    } else {
+        dataPrompt = `>?: `;
+    }
+}
+
+function startSendingTo(remote, packetType) {
+    remoteAddress = remote;
+    setDataPrompt();
+    delete hiddenSources[remote];
+    delete hiddenDestinations[remote];
     setCommandMode(false);
 }
 
 function unproto(parts) {
     const remote = validateCallSign('remote', parts[1]);
     const via = viaOption(remote, parts);
-    remoteAddress = remote;
     connection = null; // but it remains in allConnections.
+    startSendingTo(remote, 'UI');
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
-        terminal.writeLine(`(Will send UI packets${viaNote} to ${remoteAddress}.)`);
+        terminal.writeLine(`(Will send UI packets${viaNote} to ${remote}.)`);
     }
-    startSendingTo(remoteAddress, 'UI');
 } // unproto
 
 function connect(parts) {
-    remoteAddress = validateCallSign('remote', parts[1]);
-    const via = viaOption(remoteAddress, parts);
-    const viaNote = via ? ` via ${via}` : '';
-    connection = allConnections[remoteAddress];
+    const remote = validateCallSign('remote', parts[1]);
+    const via = viaOption(remote, parts);
+    connection = allConnections[remote];
     if (connection) {
+        startSendingTo(remote, 'I');
         if (verbose) {
-            terminal.writeLine(`(Will send I packets${viaNote} to ${remoteAddress}.)`);
+            terminal.writeLine(`(Will send I packets to ${remote}.)`);
         }
     } else {
+        const viaNote = via ? ` via ${via}` : '';
         const options = {
             host: host,
             port: port,
             localPort: tncPort,
             localAddress: myCall,
-            remoteAddress: remoteAddress,
+            remoteAddress: remote,
             via: via || undefined,
         };
-        terminal.writeLine(`(Connecting to ${remoteAddress}${viaNote}...)`);
+        terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
         const newConnection = AGWPE.createConnection(options, function connected() {
             try {
-                terminal.writeLine(`(Connected to ${remoteAddress}${viaNote}.)`);
-                startSendingTo(remoteAddress, 'I');
-                connection = allConnections[remoteAddress] = newConnection;
+                terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
+                connection = allConnections[remote] = newConnection;
+                startSendingTo(remote, 'I');
                 connection.pipe(new Stream.Writable({
                     write: function _write(chunk, encoding, callback) {
                         // onPacket will log the received data.
@@ -566,11 +570,11 @@ function connect(parts) {
                 showEOL ? info : !info ? ''
                     : info.toString('binary').replace(allRemoteEOLs, ''),
                 remoteEncoding);
-            logLine(message ? message : `(Disconnected from ${remoteAddress}.)`);
-            delete allConnections[remoteAddress];
+            logLine(message ? message : `(Disconnected from ${remote}.)`);
+            delete allConnections[remote];
             if (connection === newConnection) {
                 connection = null;
-                dataPrompt = `>${remoteAddress} UI: `;
+                setDataPrompt();
                 setCommandMode(true);
             }
             if (ending && Object.keys(allConnections).length <= 0) {
@@ -579,10 +583,11 @@ function connect(parts) {
         });
         ['error', 'timeout'].forEach(function(event) {
             newConnection.on(event, function(err) {
-                terminal.writeLine(`(${event} ${err || ''} from ${remoteAddress})`);
-                delete allConnections[remoteAddress];
+                terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
+                delete allConnections[remote];
                 if (connection === newConnection) {
                     connection = null;
+                    setDataPrompt();
                 }
             });
         });
@@ -590,19 +595,19 @@ function connect(parts) {
 } // connect
 
 function disconnect(arg) {
-    var remoteAddress = (arg || '');
-    if (!remoteAddress && connection) {
-        remoteAddress = connection.remoteAddress;
+    var remote = (arg || '');
+    if (!remote && connection) {
+        remote = connection.remoteAddress;
     }
-    if (!remoteAddress) {
+    if (!remote) {
         terminal.writeLine(`(You're not connected.)`);
     } else {
-        remoteAddress = validateCallSign('remote', remoteAddress.toUpperCase());
-        var target = allConnections[remoteAddress];
+        remote = validateCallSign('remote', remote.toUpperCase());
+        var target = allConnections[remote];
         if (!target) {
-            terminal.writeLine(`(You're not connected to ${remoteAddress}.)`);
+            terminal.writeLine(`(You're not connected to ${remote}.)`);
         } else {
-            logLine(`>${remoteAddress} DISC`);
+            logLine(`>${remote} DISC`);
             target.end();
         }
     }
