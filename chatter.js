@@ -402,12 +402,11 @@ function execute(command) {
         case 'u':
         case 'ui':
         case 'unproto':
-            nextCommandMode = false;
-            unproto(parts);
+            nextCommandMode = !unproto(parts);
             break;
         case 'c':
         case 'connect':
-            connect(parts);
+            nextCommandMode = !connect(parts);
             break;
         case 'd':
         case 'disconnect':
@@ -528,6 +527,7 @@ function unproto(parts) {
         const viaNote = via ? ` via ${via}` : '';
         terminal.writeLine(`(Will send UI packets${viaNote} to ${remote}.)`);
     }
+    return true;
 } // unproto
 
 function connect(parts) {
@@ -539,59 +539,59 @@ function connect(parts) {
         if (verbose) {
             terminal.writeLine(`(Will send I packets to ${remote}.)`);
         }
-    } else {
-        const viaNote = via ? ` via ${via}` : '';
-        const options = {
-            host: host,
-            port: port,
-            localPort: tncPort,
-            localAddress: myCall,
-            remoteAddress: remote,
-            via: via || undefined,
-        };
-        terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
-        const newConnection = AGWPE.createConnection(options, function connected() {
-            try {
-                terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-                connection = allConnections[remote] = newConnection;
-                startSendingTo(remote, 'I');
-                connection.pipe(new Stream.Writable({
-                    write: function _write(chunk, encoding, callback) {
-                        // onPacket will log the received data.
-                        if (callback) callback();
-                    },
-                }));
-            } catch(err) {
-                log.error(err);
-            }
-        });
-        newConnection.on('end', function(info) {
-            const message = shared.decode(
-                showEOL ? info : !info ? ''
-                    : info.toString('binary').replace(allRemoteEOLs, ''),
-                remoteEncoding);
-            logLine(message ? message : `(Disconnected from ${remote}.)`);
-            delete allConnections[remote];
-            if (connection === newConnection) {
-                connection = null;
-                setDataPrompt();
-                setCommandMode(true);
-            }
-            if (ending && Object.keys(allConnections).length <= 0) {
-                process.exit();
-            }
-        });
-        ['error', 'timeout'].forEach(function(event) {
-            newConnection.on(event, function(err) {
-                terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
-                delete allConnections[remote];
-                if (connection === newConnection) {
-                    connection = null;
-                    setDataPrompt();
-                }
-            });
-        });
+        return true;
     }
+    const viaNote = via ? ` via ${via}` : '';
+    const options = {
+        host: host,
+        port: port,
+        localPort: tncPort,
+        localAddress: myCall,
+        remoteAddress: remote,
+        via: via || undefined,
+    };
+    terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
+    const newConnection = AGWPE.createConnection(options, function connected() {
+        try {
+            terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
+            connection = allConnections[remote] = newConnection;
+            startSendingTo(remote, 'I');
+            connection.pipe(new Stream.Writable({
+                write: function _write(chunk, encoding, callback) {
+                    // onPacket will log the received data.
+                    if (callback) callback();
+                },
+            }));
+        } catch(err) {
+            log.error(err);
+        }
+    });
+    newConnection.on('end', function(info) {
+        const message = shared.decode(
+            showEOL ? info : !info ? ''
+                : info.toString('binary').replace(allRemoteEOLs, ''),
+            remoteEncoding);
+        logLine(message ? message : `(Disconnected from ${remote}.)`);
+        delete allConnections[remote];
+        if (connection === newConnection) {
+            connection = null;
+            setDataPrompt();
+            setCommandMode(true);
+        }
+        if (ending && Object.keys(allConnections).length <= 0) {
+            process.exit();
+        }
+    });
+    ['error', 'timeout'].forEach(function(event) {
+        newConnection.on(event, function(err) {
+            terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
+            try {
+                newConnection.end(); // in case it hasn't already ended.
+            } catch(err) {
+            }
+        });
+    });
+    return false; // not connected yet. Stay tuned.
 } // connect
 
 function disconnect(arg) {
