@@ -283,11 +283,15 @@ function initialize() {
                 execute(line);
             } else if (connection) {
                 connection.write(info, function sent() {
-                    logLine(
-                        '>' + connection.remoteAddress
-                            + ' I ' + escapify(line + (showEOL ? remoteEOL : '')));
+                    if (showEOL) {
+                        logLine('>' + connection.remoteAddress + ' I ' + escapify(line + remoteEOL));
+                    } else {
+                        line.split(allRemoteEOLs).forEach(function(part) {
+                            logLine('>' + connection.remoteAddress + ' I ' + part);
+                        });
+                    }
+                    setCommandMode(false);
                 });
-                setCommandMode(false);
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
                 socket.send({
