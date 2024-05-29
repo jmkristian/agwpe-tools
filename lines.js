@@ -113,7 +113,7 @@ class StdHelper extends Stream.Writable {
     }
 
     /** Show a line to the user. */
-    writeLine(chunk, encoding, callback) {
+    writeLine(chunk, callback) {
         const line = (typeof chunk) == 'string' ? chunk : chunk.toString();
         var output = '';
         var b = this.prefix.length + this.buffer.length;
@@ -203,8 +203,8 @@ class Lines extends EventEmitter {
     }
 
     /** Show a line to the user. */
-    writeLine(chunk, encoding, callback) {
-        this.std.writeLine(chunk, encoding, callback);
+    writeLine(line, callback) {
+        this.std.writeLine(line, callback);
     }
 
     /** Emit all the lines contained in the given file. */

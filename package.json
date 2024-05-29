@@ -7,7 +7,7 @@
     "node": ">=8.17.0"
   },
   "dependencies": {
-    "@jmkristian/node-agwpe": "^1.0.6",
+    "@jmkristian/node-agwpe": "^1.0.7",
     "bunyan": "^1.8.15",
     "bunyan-format": "^0.2.1",
     "minimist": "^1.2.8"

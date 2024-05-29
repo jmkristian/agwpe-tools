@@ -1,6 +1,6 @@
 'use strict';
 
-const AGWPE = require('@jmkristian/node-agwpe');
+const AGWPE = require('../node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
 const Lines = require('./lines.js').Lines;
@@ -32,6 +32,7 @@ const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
 const allOS_EOLs = new RegExp(OS.EOL, 'g');
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
+const decodedEOL = shared.decode(remoteEOL, remoteEncoding);
 const verbose = args.verbose || args.v;
 const showTime = args['show-time'] || args['show-timestamp'] || args['timestamp'];
 
@@ -62,6 +63,7 @@ var hasEscaped = false;
 var connection = null;
 var remoteAddress = null;
 var server = null;
+var rawSocket = null;
 var ending = false;
 
 /** Convert s to a javascript string literal (without the quotation marks.) */
@@ -200,17 +202,33 @@ function pad2(n) {
 }
 
 function logLine(line, callback) {
-    if (showTime) {
+    try {
         const now = new Date();
-        terminal.writeLine(
-            pad2(now.getHours())
-                + ':' + pad2(now.getMinutes())
-                + ':' + pad2(now.getSeconds())
-                + ' ' + line,
-            callback);
-    } else {
-        terminal.writeLine(line, callback);
+        const prefix = !showTime ? ''
+              : pad2(now.getHours())
+              + ':' + pad2(now.getMinutes())
+              + ':' + pad2(now.getSeconds())
+              + ' ';
+        terminal.writeLine(prefix + line, callback);
+    } catch(err) {
+        callback(err);
     }
+}
+
+function logLines(prefix, lines, callback) {
+    log.trace('logLines(%s, %s, %s)', prefix, lines && lines.length, typeof callback);
+    var next = 0;
+    const logNextLine = function logNextLine(err) {
+        if (err) {
+            if (callback) callback(err);
+        } else if (next < lines.length) {
+            const line = escapify(lines[next++]);
+            logLine(`${prefix} ${line}`, logNextLine);
+        } else {
+            if (callback) callback();
+        }
+    };
+    logNextLine();
 }
 
 function showUsage(exitCode) {
@@ -237,8 +255,8 @@ function showUsage(exitCode) {
     if (exitCode != null) process.exit(exitCode);
 }
 
-function summarize(packet) {
-    log.trace('summarize(%s)', packet);
+function logPacketReceived(packet, callback) {
+    log.trace('logPacketReceived(%s, %s)', packet, typeof callback);
     var marker = '';
     if (packet.fromAddress == myCall) {
         marker += '>' + packet.toAddress;
@@ -255,9 +273,9 @@ function summarize(packet) {
         }
     }
     marker += ` ${packet.type}`;
-    splitLines(shared.decode(packet.info || '', remoteEncoding)).forEach(function(line) {
-        logLine(`${marker} ${escapify(line)}`);
-    });
+    logLines(marker,
+             splitLines(shared.decode(packet.info || '', remoteEncoding)),
+             callback);
 }
 
 function setCommandMode(newMode) {
@@ -274,16 +292,12 @@ function setCommandMode(newMode) {
 }
 
 function toRemoteLine(line) {
-    return Buffer.from(
-        shared.encode(line, remoteEncoding).toString('binary') + remoteEOL,
-        'binary');
+    return shared.encode(line + decodedEOL, remoteEncoding);
 }
 
 function logDataSent(packetType, lines, remoteAddress, via) {
-    const marker = `>${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `
-    lines.split(allOS_EOLs).forEach(function(line) {
-        logLine(marker + escapify(line));
-    });
+    logLines(`>${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `,
+             lines.split(allOS_EOLs).map(escapify));
 }
 
 function initialize() {
@@ -306,7 +320,7 @@ function initialize() {
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
-                socket.send({
+                rawSocket.write({
                     port: tncPort,
                     type: 'UI',
                     toAddress: remoteAddress,
@@ -328,27 +342,69 @@ function initialize() {
 
 function restartServer() {
     if (server) server.close();
-    server = new AGWPE.Server({
+    server = null;
+    rawSocket = null;
+    const newServer = new AGWPE.Server({
         host: host,
         port: port,
-        log: log,
+        localPort: tncPort,
+        logger: log,
     });
-    server.on('connection', function(connection) {
+    newServer.on('error', function(err) {
+        if (!server || server === newServer) {
+            // not necessary: newServer.destroy();
+            log.error('server error(%s)', err ? err : '');
+            process.exit(1);
+        } else {
+            log.debug('previous server error(%s)', err ? err : '');
+        }
+    });
+    newServer.on('close', function closed(err) {
+        if (!server || server === newServer) {
+            // not necessary: newServer.destroy();
+            process.exit(2);
+        } else {
+            log.debug('previous server close(%s)', err ? err : '');
+        }
+    });
+    newServer.on('connection', function(connection) {
         const remoteAddress = connection.remoteAddress.toUpperCase();
         allConnections[remoteAddress] = connection;
         terminal.writeLine(
             `(Received a connection.`
                 + ` The command "c ${remoteAddress}" will start sending data there.)`);
     });
-    server.on('error', function(err) {
-        log.error(err);
-    });
-    server.listen({
+    newServer.listen({
         host: myCall,
         port: tncPort,
     }, function listening() {
-        if (verbose) {
-            terminal.writeLine(`(Listening for connections on TNC port ${tncPort}.)`);
+        if (server && server !== newServer) {
+            // Somebody else got there first.
+            newServer.destroy();
+        } else {
+            server = newServer;
+            if (verbose) {
+                terminal.writeLine(`(Listening to TNC port ${tncPort}.)`);
+            }
+            const newSocket = newServer.createSocket();
+            ['close', 'end', 'error', 'timeout'].forEach(function(event) {
+                newSocket.on(event, function(err) {
+                    log.error('raw socket %s(%s)', event, err != null ? err : '');
+                });
+            });
+            newSocket.bind(function bound(err) {
+                if (err) {
+                    log.error(err);
+                } else {
+                    newSocket.pipe(new Stream.Writable({
+                        objectMode: true,
+                        write: function _write(packet, encoding, callback) {
+                            onPacket(packet, callback);
+                        },
+                    }));
+                    rawSocket = newSocket;
+                }
+            });
         }
     });
 } // restartServer
@@ -372,7 +428,7 @@ function viaOption(remoteAddress, parts) {
     }
 }
 
-function onPacket(packet) {
+function onPacket(packet, callback) {
     try {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
@@ -381,12 +437,16 @@ function onPacket(packet) {
                 if (!(isRepetitive(packet) // Call this first for its side effect.
                       || hiddenSources[packet.fromAddress]
                       || hiddenDestinations[packet.toAddress])) {
-                    summarize(packet);
+                    logPacketReceived(packet, callback);
+                    return;
                 }
             }
         }
+        // We didn't show this packet, for one of those reasons.
+        if (callback) callback();
     } catch(err) {
         log.error(err);
+        if (callback) callback(err);
     }
 }
 
@@ -746,22 +806,6 @@ try {
         terminal.on(event, function(info) {
             bye();
         });
-    });
-    const socket = AGWPE.raw.createSocket({
-        host: host,
-        port: port,
-        logger: log,
-    }, function connected() {
-    });
-    socket.on('packet', function(packet) {
-        onPacket(packet);
-    });
-    socket.on('error', function(err) {
-        log.error('error(%s)', err != null ? err : '');
-    });
-    socket.on('close', function(err) {
-        log.warn('close(%s)', err != null ? err : '');
-        process.exit(1);
     });
 } catch(err) {
     log.error(err);
