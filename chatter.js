@@ -68,8 +68,14 @@ var ending = false;
 
 /** Convert s to a javascript string literal (without the quotation marks.) */
 function escapify(s) {
-    if (!showControls) return s;
-    return s && s
+    if (!s) {
+        return s;
+    } else if (!showControls) {
+        return s.replace(controlCharacters, '');
+    }
+    var result = s;
+    if (!showEOL) result = result.replace(allRemoteEOLs, '');
+    return result
         .replace(/\\/g, '\\\\')
         .replace(/\r/g, '\\r')
         .replace(/\n/g, '\\n')
