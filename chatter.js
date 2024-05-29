@@ -31,6 +31,7 @@ const showEOL = args['show-eol'];
 const remoteEOL = shared.fromASCII(args.eol) || '\r';
 const allRemoteEOLs = new RegExp(remoteEOL, 'g');
 const allOS_EOLs = new RegExp(OS.EOL, 'g');
+const eachLine = new RegExp('.*' + remoteEOL, 'g');
 const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
 const decodedEOL = shared.decode(remoteEOL, remoteEncoding);
 const verbose = args.verbose || args.v;
@@ -60,7 +61,8 @@ var commandMode = true;
 const commandPrompt = 'cmd: ';
 var dataPrompt = '';
 var hasEscaped = false;
-var connection = null;
+var connected = null;
+var connectedBuffer = '';
 var remoteAddress = null;
 var server = null;
 var rawSocket = null;
@@ -68,12 +70,10 @@ var ending = false;
 
 /** Convert s to a javascript string literal (without the quotation marks.) */
 function escapify(s) {
-    if (!s) {
-        return s;
-    } else if (!showControls) {
-        return s.replace(controlCharacters, '');
+    var result = (s == null) ? '' : s.toString('binary');
+    if (!showControls) {
+        return result.replace(controlCharacters, '');
     }
-    var result = s;
     if (!showEOL) result = result.replace(allRemoteEOLs, '');
     return result
         .replace(/\\/g, '\\\\')
@@ -217,7 +217,7 @@ function logLine(line, callback) {
               + ' ';
         terminal.writeLine(prefix + line, callback);
     } catch(err) {
-        callback(err);
+        if (callback) callback(err);
     }
 }
 
@@ -310,7 +310,7 @@ function initialize() {
     setDataPrompt();
     setCommandMode(!remoteAddress);
     terminal.on('escape', function() {
-        if (commandMode && !(connection || remoteAddress)) {
+        if (commandMode && !(connected || remoteAddress)) {
             terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
         } else {
             setCommandMode(!commandMode);
@@ -320,9 +320,9 @@ function initialize() {
         try {
             if (commandMode) {
                 execute(line);
-            } else if (connection) {
-                connection.write(toRemoteLine(line), function sent() {
-                    logDataSent('I', line, connection.remoteAddress);
+            } else if (connected) {
+                connected.write(toRemoteLine(line), function sent() {
+                    logDataSent('I', line, connected.remoteAddress);
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
@@ -442,7 +442,11 @@ function onPacket(packet, callback) {
             if (verbose || packet.type == 'I' || packet.type == 'UI') {
                 if (!(isRepetitive(packet) // Call this first for its side effect.
                       || hiddenSources[packet.fromAddress]
-                      || hiddenDestinations[packet.toAddress])) {
+                      || hiddenDestinations[packet.toAddress]
+                      || (connected
+                          && packet.type == 'I'
+                          && packet.toAddress == connected.localAddress)))
+                {
                     logPacketReceived(packet, callback);
                     return;
                 }
@@ -452,6 +456,26 @@ function onPacket(packet, callback) {
         if (callback) callback();
     } catch(err) {
         log.error(err);
+        if (callback) callback(err);
+    }
+}
+
+function onConnectedData(chunk, encoding, callback) {
+    try {
+        const data = (chunk == null) ? '' : chunk.toString('binary');
+        if (log.trace()) {
+            log.trace('onConnectedData(%s, %s, %s)', escapify(data), encoding, typeof callback);
+        }
+        const remainder = data.replace(eachLine, function(line) {
+            connectedBuffer += shared.decode(Buffer.from(line, 'binary'), remoteEncoding);
+            logLines(`<${connected.remoteAddress} I `, [connectedBuffer]);
+            connectedBuffer = '';
+            return '';
+        });
+        connectedBuffer += remainder;
+        setDataPrompt();
+        terminal.prompt(dataPrompt, callback);
+    } catch(err) {
         if (callback) callback(err);
     }
 }
@@ -567,8 +591,8 @@ function execute(command) {
 } // execute
 
 function setDataPrompt() {
-    if (connection) {
-        dataPrompt = `>${connection.remoteAddress} I: `;
+    if (connected) {
+        dataPrompt = `>${connected.remoteAddress} I: ${connectedBuffer}`;
     } else if (remoteAddress) {
         dataPrompt = `>${remoteAddress} UI: `;
     } else {
@@ -587,7 +611,7 @@ function startSendingTo(remote, packetType) {
 function unproto(parts) {
     const remote = validateCallSign('remote', parts[1]);
     const via = viaOption(remote, parts);
-    connection = null; // but it remains in allConnections.
+    connected = null; // but it remains in allConnections.
     startSendingTo(remote, 'UI');
     if (verbose) {
         const viaNote = via ? ` via ${via}` : '';
@@ -599,8 +623,8 @@ function unproto(parts) {
 function connect(parts) {
     const remote = validateCallSign('remote', parts[1]);
     const via = viaOption(remote, parts);
-    connection = allConnections[remote];
-    if (connection) {
+    connected = allConnections[remote];
+    if (connected) {
         startSendingTo(remote, 'I');
         if (verbose) {
             terminal.writeLine(`(Will send I packets to ${remote}.)`);
@@ -617,15 +641,14 @@ function connect(parts) {
         via: via || undefined,
     };
     terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
-    const newConnection = AGWPE.createConnection(options, function connected() {
+    const newConnection = AGWPE.createConnection(options, function() {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-            connection = allConnections[remote] = newConnection;
+            connected = allConnections[remote] = newConnection;
             startSendingTo(remote, 'I');
-            connection.pipe(new Stream.Writable({
+            connected.pipe(new Stream.Writable({
                 write: function _write(chunk, encoding, callback) {
-                    // onPacket will log the received data.
-                    if (callback) callback();
+                    onConnectedData(chunk, encoding, callback);
                 },
             }));
         } catch(err) {
@@ -639,8 +662,8 @@ function connect(parts) {
             remoteEncoding);
         logLine(message ? message : `(Disconnected from ${remote}.)`);
         delete allConnections[remote];
-        if (connection === newConnection) {
-            connection = null;
+        if (connected === newConnection) {
+            connected = null;
             setDataPrompt();
             setCommandMode(true);
         }
@@ -662,8 +685,8 @@ function connect(parts) {
 
 function disconnect(arg) {
     var remote = (arg || '');
-    if (!remote && connection) {
-        remote = connection.remoteAddress;
+    if (!remote && connected) {
+        remote = connected.remoteAddress;
     }
     if (!remote) {
         terminal.writeLine(`(You're not connected.)`);
