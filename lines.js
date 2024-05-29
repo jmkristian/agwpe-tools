@@ -91,11 +91,17 @@ class StdHelper extends Stream.Writable {
         if (this.prefix == prefix) {
             if (callback) callback();
         } else {
+            const newPrefix = prefix ? prefix.toString() : '';
+            const oldLength = this.prefix.length + this.buffer.length;
+            const newLength = newPrefix.length + this.buffer.length;
             var output = '';
-            for (var b = this.prefix.length + this.buffer.length; b > 0 ; --b) {
+            for (var b = oldLength; b > newLength; --b) {
                 output += '\b \b';
             }
-            this.prefix = '' + prefix;
+            for (; b > 0; --b) {
+                output += '\b';
+            }
+            this.prefix = newPrefix;
             output += this.prefix + this.buffer;
             this.stdout.write(output, callback);
         }
@@ -114,7 +120,7 @@ class StdHelper extends Stream.Writable {
 
     /** Show a line to the user. */
     writeLine(chunk, callback) {
-        const line = (typeof chunk) == 'string' ? chunk : chunk.toString();
+        const line = chunk ? chunk.toString() : '';
         var output = '';
         var b = this.prefix.length + this.buffer.length;
         // Erase part of the buffered line:
