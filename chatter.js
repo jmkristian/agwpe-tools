@@ -45,6 +45,14 @@ var myCall = '';
 var tncPort = 0;
 var heard = [];
 var heardLimit = 30;
+const hiddenTypes = {
+    RR: true,
+    RNR: true,
+    REJ: true,
+    SREJ: true,
+    UA: true,
+};
+
 var hiddenSources = {};
 var hiddenDestinations = {};
 
@@ -482,7 +490,7 @@ function onPacket(packet, callback) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (verbose || packet.type == 'I' || packet.type == 'UI') {
+            if (verbose || !hiddenTypes[packet.type]) {
                 if (!(isRepetitive(packet) // Call this first for its side effect.
                       || hiddenSources[packet.fromAddress]
                       || hiddenDestinations[packet.toAddress]
