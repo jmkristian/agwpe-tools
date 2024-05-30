@@ -303,11 +303,11 @@ function logPacketReceived(packet, callback) {
     log.trace('logPacketReceived(%s, %s)', packet, typeof callback);
     var marker = '';
     if (packet.fromAddress == myCall) {
-        marker += '>' + packet.toAddress;
+        marker += `> ${packet.toAddress}`;
     } else if (packet.toAddress == myCall) {
-        marker += '<' + packet.fromAddress;
+        marker += `< ${packet.fromAddress}`;
     } else {
-        marker += packet.fromAddress + '>' + packet.toAddress;
+        marker += `${packet.fromAddress} > ${packet.toAddress}`;
     }
     if (packet.via && packet.via.length) {
         var via = [];
@@ -349,7 +349,7 @@ function toRemoteLine(line) {
 }
 
 function logDataSent(packetType, lines, remoteAddress, via) {
-    logLines(`>${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `,
+    logLines(`> ${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `,
              lines.split(allOS_EOLs).map(escapify));
 }
 
@@ -384,7 +384,7 @@ function initialize() {
                     logDataSent('UI', line, remoteAddress, via);
                 });
             } else {
-                terminal.writeLine('(Where to? Enter "u <call sign>" to set a destination address.)');
+                terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
             }
         } catch(err) {
             log.error(err);
@@ -511,7 +511,7 @@ function onConnectedData(chunk, encoding, callback) {
         }
         const remainder = data.replace(eachLine, function(line) {
             connectedBuffer += shared.decode(Buffer.from(line, 'binary'), remoteEncoding);
-            logLines(`<${connected.remoteAddress} I `, [connectedBuffer]);
+            logLines(`< ${connected.remoteAddress} I `, [connectedBuffer]);
             connectedBuffer = '';
             return '';
         });
@@ -645,11 +645,11 @@ function execute(command) {
 
 function setDataPrompt() {
     if (connected) {
-        dataPrompt = `>${connected.remoteAddress} I: ${connectedBuffer}`;
+        dataPrompt = `> ${connected.remoteAddress} I: ${connectedBuffer}`;
     } else if (remoteAddress) {
-        dataPrompt = `>${remoteAddress} UI: `;
+        dataPrompt = `> ${remoteAddress} UI: `;
     } else {
-        dataPrompt = `>?: `;
+        dataPrompt = `> ?: `;
     }
 }
 
@@ -749,7 +749,7 @@ function disconnect(arg) {
         if (!target) {
             terminal.writeLine(`(You're not connected to ${remote}.)`);
         } else {
-            logLine(`>${remote} DISC`);
+            logLine(`> ${remote} DISC`);
             target.end();
         }
     }
