@@ -553,12 +553,6 @@ function execute(command) {
         case 'disconnect':
             disconnect(parts[1]);
             break;
-        case 'port':
-            const newPort = AGWPE.validatePort(parts[1]);
-            if (newPort != tncPort) {
-                restartServer(newPort);
-            }
-            break;
         case 'via':
             setVia(parts);
             break;
@@ -627,13 +621,11 @@ function execute(command) {
                 "hear number",
                 "          : Set the maximum number of source addresses to remember.",
                 "hide [<fromCall >toCall ...]",
-                "          : Stop showing data that were sent by fromCall or sent to toCall.",
+                "          : Stop showing packets addressed from: fromCall or to: toCall.",
                 "show [<fromCall >toCall ...]",
-                "          : Resume showing data that were sent by fromCall or sent to toCall.",
+                "          : Resume showing packets addressed from: fromCall or to: toCall.",
                 "hide?",
                 "          : Show which packets are currently hidden.",
-                "port number",
-                "          : Use that AGWPE port to send and receive data.",
                 "b[ye]",
                 "          : Close all connections and exit.",
                 "",
