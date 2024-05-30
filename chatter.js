@@ -581,10 +581,8 @@ function execute(command) {
             show(parts);
             break;
         case 'hide?':
-            terminal.writeLine(
-                'hidden: '
-                    + Object.keys(hiddenDestinations).map(function(s){return '>' + s;}).join(' ')
-                    + ' ' + Object.keys(hiddenSources).map(function(s){return '<' + s;}).join(' '));
+        case 'hidden?':
+            showHidden();
             break;
         case 'x':
         case 'xecute':
@@ -632,6 +630,8 @@ function execute(command) {
                 "          : Stop showing data that were sent by fromCall or sent to toCall.",
                 "show [<fromCall >toCall ...]",
                 "          : Resume showing data that were sent by fromCall or sent to toCall.",
+                "hide?",
+                "          : Show which packets are currently hidden.",
                 "port number",
                 "          : Use that AGWPE port to send and receive data.",
                 "b[ye]",
@@ -822,15 +822,33 @@ function showVia(parts) {
     }
 }
 
+function showHidden() {
+    var keys = Object.keys(hiddenTypes);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `.${key}`;
+    }).join(' '));
+    keys = Object.keys(hiddenDestinations);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `>${key}`;
+    }).join(' '));
+    keys = Object.keys(hiddenSources);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `<${key}`;
+    }).join(' '));
+}
+
 function hide(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
         switch(part.charAt(0)) {
+        case '>':
+            hiddenDestinations[validateCallSign('destination', part.substring(1))] = true;
+            break;
         case '<':
             hiddenSources[validateCallSign('source', part.substring(1))] = true;
             break;
-        case '>':
-            hiddenDestinations[validateCallSign('destination', part.substring(1))] = true;
+        case '.':
+            hiddenTypes[part.substring(1).toUpperCase()] = true;
             break;
         default:
             terminal.writeLine(`Do you mean >${part} (destination) or <${part} (source)?`);
@@ -842,11 +860,14 @@ function show(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
         switch(part.charAt(0)) {
+        case '>':
+            delete hiddenDestinations[validateCallSign('destination', part.substring(1))];
+            break;
         case '<':
             delete hiddenSources[validateCallSign('source', part.substring(1))];
             break;
-        case '>':
-            delete hiddenDestinations[validateCallSign('destination', part.substring(1))];
+        case '.':
+            delete hiddenTypes[part.substring(1).toUpperCase()];
             break;
         default:
             terminal.writeLine(`Do you mean >${part} (to) or <${part} (from)?`);
