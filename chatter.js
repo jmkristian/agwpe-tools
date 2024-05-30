@@ -229,7 +229,7 @@ function logLines(prefix, lines, callback) {
             if (callback) callback(err);
         } else if (next < lines.length) {
             const line = escapify(lines[next++]);
-            logLine(`${prefix} ${line}`, logNextLine);
+            logLine(`${prefix}${line}`, logNextLine);
         } else {
             if (callback) callback();
         }
