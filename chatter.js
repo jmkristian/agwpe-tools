@@ -271,12 +271,21 @@ function logPacketReceived(packet, callback) {
     } else {
         marker += packet.fromAddress + '>' + packet.toAddress;
     }
-    if (packet.via) {
-        marker += ' via ';
-        for (var v = 0; v < packet.via.length; ++v) {
-            if (v > 0) marker += ',';
-            marker += packet.via[v];
+    if (packet.via && packet.via.length) {
+        var via = [];
+        var lastSender = 0;
+        for (var v = packet.via.length; --v >= 0; ) {
+            var sender = packet.via[v];
+            if (sender.endsWith('*')) { // a digipeater sent this
+                if (lastSender == 0) {
+                    lastSender = v;
+                } else {
+                    sender = sender.substring(0, sender.length - 1);
+                }
+            }
+            via.unshift(sender);
         }
+        marker += ' via' + via.join(',');
     }
     marker += ` ${packet.type}`;
     logLines(marker,
