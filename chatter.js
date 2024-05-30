@@ -12,7 +12,8 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'show-timestamp', 'timestamp', 'trace', 'verbose', 'v'],
+    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'show-timestamp', 'timestamp',
+                'trace', 'verbose', 'v'],
     'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
 });
 const log = Bunyan.createLogger({
@@ -42,6 +43,8 @@ var bestPathTo = {};
 var pathTo = {};
 var myCall = '';
 var tncPort = 0;
+var heard = [];
+var heardLimit = 30;
 var hiddenSources = {};
 var hiddenDestinations = {};
 
@@ -154,11 +157,46 @@ function arraysEqual(a, b) {
     return true;
 }
 
+function padString(s, length) {
+    var t = s;
+    while (t.length < length) {
+        t += ' ';
+    }
+    return t;
+}
+
+function showHeard() {
+    var lines = heard.map(function(from) {
+        const d = new Date(from.when);
+        return pad2(d.getMonth())
+            + '/' + pad2(d.getDate())
+            + '/' + d.getFullYear()
+            + ' ' + pad2(d.getHours())
+            + ':' + pad2(d.getMinutes())
+            + ':' + pad2(d.getSeconds())
+            + ' ' + padString(from.fromAddress, 9)
+            + (from.via ? ' via ' + from.via : '');
+    }).forEach(function(line) {
+        terminal.writeLine(line);
+    });
+}
+
 function noteReturnPath(packet) {
     try {
         const fromAddress = validateCallSign('source', packet.fromAddress);
         if (fromAddress == myCall) {
             return;
+        }
+        heard = heard.filter(function(item) {
+            return item.fromAddress != fromAddress;
+        });
+        heard.push({
+            fromAddress: fromAddress,
+            via: (packet.via && packet.via.length) ? packet.via.join(',') : null,
+            when: new Date().getTime(),
+        });
+        while (heard.length > heardLimit) {
+            heard.shift();
         }
         // Construct a path from here to fromAddress:
         var newPath = '';
@@ -285,9 +323,9 @@ function logPacketReceived(packet, callback) {
             }
             via.unshift(sender);
         }
-        marker += ' via' + via.join(',');
+        marker += ' via ' + via.join(',');
     }
-    marker += ` ${packet.type}`;
+    marker += ` ${packet.type} `;
     logLines(marker,
              splitLines(shared.decode(packet.info || '', remoteEncoding)),
              callback);
@@ -352,54 +390,50 @@ function initialize() {
             log.error(err);
         }
     });
-    restartServer();
+    restartServer(tncPort);
 }
 
-function restartServer() {
+function restartServer(newPort) {
     if (server) server.close();
     server = null;
+    tncPort = null;
     rawSocket = null;
     const newServer = new AGWPE.Server({
         host: host,
         port: port,
-        localPort: tncPort,
+        localPort: newPort,
         logger: log,
     });
     newServer.on('error', function(err) {
-        if (!server || server === newServer) {
-            // not necessary: newServer.destroy();
-            log.error('server error(%s)', err ? err : '');
-            process.exit(1);
-        } else {
-            log.debug('previous server error(%s)', err ? err : '');
-        }
+        log.error('server error(%s)', err ? err : '');
     });
     newServer.on('close', function closed(err) {
-        if (!server || server === newServer) {
-            // not necessary: newServer.destroy();
-            process.exit(2);
+        if (server === newServer) {
+            server = null;
+            log.error('server closed(%s)', err || '');
         } else {
-            log.debug('previous server close(%s)', err ? err : '');
+            log.debug('previous server closed(%s)', err || '');
         }
     });
     newServer.on('connection', function(connection) {
-        const remoteAddress = connection.remoteAddress.toUpperCase();
-        allConnections[remoteAddress] = connection;
+        const from = connection.remoteAddress.toUpperCase();
+        allConnections[from] = connection;
         terminal.writeLine(
             `(Received a connection.`
-                + ` The command "c ${remoteAddress}" will start sending data there.)`);
+                + ` The command "c ${from}" will start sending data there.)`);
     });
     newServer.listen({
         host: myCall,
-        port: tncPort,
+        port: newPort,
     }, function listening() {
         if (server && server !== newServer) {
             // Somebody else got there first.
             newServer.destroy();
         } else {
+            tncPort = newPort;
             server = newServer;
             if (verbose) {
-                terminal.writeLine(`(Listening to TNC port ${tncPort}.)`);
+                terminal.writeLine(`(Listening to TNC port ${newPort}.)`);
             }
             const newSocket = newServer.createSocket();
             ['close', 'end', 'error', 'timeout'].forEach(function(event) {
@@ -511,15 +545,10 @@ function execute(command) {
         case 'disconnect':
             disconnect(parts[1]);
             break;
-        case 'p':
         case 'port':
-            const newPort = AGWPE.validatePort(parts[1] || '0');
-            if (tncPort != newPort) {
-                tncPort = newPort;
-                restartServer();
-            }
-            if (verbose) {
-                terminal.writeLine(`(Communicating via TNC port ${tncPort}.)`);
+            const newPort = AGWPE.validatePort(parts[1]);
+            if (newPort != tncPort) {
+                restartServer(newPort);
             }
             break;
         case 'via':
@@ -528,11 +557,18 @@ function execute(command) {
         case 'via?':
             showVia(parts);
             break;
-        case 'h':
+        case 'heard':
+            showHeard();
+            break;
+        case 'hear':
+            heardLimit = parseInt(parts[1]);
+            while (heard.length > heardLimit) {
+                heard.shift();
+            }
+            break;
         case 'hide':
             hide(parts);
             break;
-        case 's':
         case 'show':
             show(parts);
             break;
@@ -562,39 +598,47 @@ function execute(command) {
             terminal.writeLine(command + '?');
             [
                 "The available commands are:",
-                "U[nproto] callsign [via callsign,...]",
+                "u[nproto] callsign [via callsign,...]",
                 "          : Send the following data in UI packets to that call sign via",
                 "          : those digipeaters.",
-                "C[onnect] callsign [via callsign,...]",
+                "c[onnect] callsign [via callsign,...]",
                 "          : Send the following data in a connection to that call sign via",
                 "          : those digipeaters.",
-                "D[isconnect] [callsign]",
+                "d[isconnect] [callsign]",
                 "          : Disconnect from that call sign or (with no call sign) disconnect",
                 "          : from the station to which you're currently connected.",
-                "Via [repeater,...]",
+                "via [repeater,...]",
                 "          : Set the default list of digipeaters via which to communicate with",
                 "          : a new station. If you don't list any digipeaters, the default",
                 "          : will be to communicate directly.",
-                "Via? [callsign]",
+                "via? [callsign]",
                 "          : Show the current and default digipeaters via which to communicate",
                 "          : with that call sign or (with no call sign) a new call sign.",
-                "H[ide] [<fromCall >toCall ...]",
-                "          : Stop showing data that were sent by fromCall or sent to toCall.",
-                "S[how] [<fromCall >toCall ...]",
-                "          : Resume showing data that were sent by fromCall or sent to toCall.",
-                "X[ecute] fileName",
+                "x[ecute] fileName",
                 "          : Read a file and interpret it like input that you type.",
-                "P[ort] number",
+                "heard",
+                "          : Show a list of source addresses received recently.",
+                "hear number",
+                "          : Set the maximum number of source addresses to remember.",
+                "hide [<fromCall >toCall ...]",
+                "          : Stop showing data that were sent by fromCall or sent to toCall.",
+                "show [<fromCall >toCall ...]",
+                "          : Resume showing data that were sent by fromCall or sent to toCall.",
+                "port number",
                 "          : Use that AGWPE port to send and receive data.",
-                "B[ye]",
+                "b[ye]",
                 "          : Close all connections and exit.",
+                "",
+                "Commands are not case-sensitive.",
+
             ].forEach(function(line) {
                 terminal.writeLine(line);
             });
         }
     } catch(err) {
-        log.error(err);
+        if (log.debug()) log.debug(err);
         nextCommandMode = true;
+        terminal.writeLine('(' + err + ')');
     }
     setCommandMode(nextCommandMode);
 } // execute
