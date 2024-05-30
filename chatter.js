@@ -490,17 +490,17 @@ function onPacket(packet, callback) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (verbose || !hiddenTypes[packet.type]) {
-                if (!(isRepetitive(packet) // Call this first for its side effect.
-                      || hiddenSources[packet.fromAddress]
-                      || hiddenDestinations[packet.toAddress]
-                      || (connected
-                          && packet.type == 'I'
-                          && packet.toAddress == connected.localAddress)))
-                {
-                    logPacketReceived(packet, callback);
-                    return;
-                }
+            if (verbose
+                || !(isRepetitive(packet) // Call isRepetitive first for its side effect.
+                     || hiddenTypes[packet.type]
+                     || hiddenSources[packet.fromAddress]
+                     || hiddenDestinations[packet.toAddress]
+                     || (connected
+                         && packet.type == 'I'
+                         && packet.toAddress == connected.localAddress)))
+            {
+                logPacketReceived(packet, callback);
+                return;
             }
         }
         // We didn't show this packet, for one of those reasons.
