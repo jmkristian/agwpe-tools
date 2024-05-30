@@ -53,12 +53,32 @@ After you start it with your call sign, enter the command '?' to see
 a summary of all its commands.
 
 Chatter outputs a summary of all the data that AGWPE receives.
-You can filter out some of the data using the `hide` and `show` commands.
+You can filter out some of the data using `hide` and `show` commands.
 
 To send data, either give the destination call sign on the command line
 (after your call sign)
-or enter an `unproto` or `connect` command.
+or run an `unproto` or `connect` command.
 Then type the data you want to send.
+
+Chatter hides repetitive packets, by default.
+Usually this means packets that are retransmitted by repeaters.
+In general, it won't show a packet that's
+the same (except for repeaters) as another packet it heard recently.
+To see the repetitive packets, add --verbose to the command line.
+
+If you don't specify the 'via' option to 'connect' or 'unproto' commands,
+chatter will try to use the best sequence of repeaters.
+To do this, it listens to all packets,
+observes the repeaters that other stations use
+and picks out the shortest sequence that it heard directly from a repeater.
+If it hears directly from a source station, it will choose no repeaters.
+Of course, it takes time to build up this information by hearing packets.
+If you know the right repeaters,
+use the 'via' command to set the default for all stations,
+or specify a 'via' option to a 'connect' or 'unproto' command.
+Then chatter will use the repeaters you specify.
+It might suggest a shorter sequence if it hears one repeatedly,
+but it won't override your choice.
 
 ### Linux
 
@@ -75,7 +95,7 @@ To get started:
 2. [Clone](https://www.techrepublic.com/article/how-to-clone-github-repository/)
    the [agwpe-tools](https://github.com/jmkristian/agwpe-tools) repository.
 3. Start a shell and `cd` into your clone.
-4. Download node modules, by running the command `npm install`.
+4. Run the command `npm install` to download other node packages that you'll need.
    Ignore messages about finding Python; they're harmless.
 5. Start your TNC (e.g. Direwolf).
 6. Run one of the programs, either:
