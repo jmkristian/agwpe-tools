@@ -485,6 +485,19 @@ function viaOption(remoteAddress, parts) {
     }
 }
 
+function isDataConnectedToMe(packet) {
+    if (packet.type != 'I') { // It's not data.
+        return false;
+    }
+    if (connected && connected.localAddress == packet.toAddress) {
+        return true;
+    }
+    var found = Object.keys(allConnections).filter(function(remoteAddress) {
+        return allConnections[remoteAddress].localAddress == packet.toAddress;
+    });
+    return found.length > 0;
+}
+
 function onPacket(packet, callback) {
     try {
         log.trace('onPacket(%s)', packet);
@@ -494,13 +507,13 @@ function onPacket(packet, callback) {
                 || !(isRepetitive(packet) // Call isRepetitive first for its side effect.
                      || hiddenTypes[packet.type]
                      || hiddenSources[packet.fromAddress]
-                     || hiddenDestinations[packet.toAddress]
-                     || (connected
-                         && packet.type == 'I'
-                         && packet.toAddress == connected.localAddress)))
+                     || hiddenDestinations[packet.toAddress]))
             {
-                logPacketReceived(packet, callback);
-                return;
+                // Don't log data received on an active connection:
+                if (!isDataConnectedToMe(packet)) {
+                    logPacketReceived(packet, callback);
+                    return;
+                }
             }
         }
         // We didn't show this packet, for one of those reasons.
