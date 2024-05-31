@@ -83,7 +83,7 @@ but it won't override your choice.
 ### Linux
 
 These programs work similarly on Linux and other platforms that support
-[node.js](https://nodejs.org/en/download/).
+[node.js](http://nodejs.org).
 To get started:
 
 1. Get node.js version 8.17 or later.
