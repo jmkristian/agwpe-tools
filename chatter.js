@@ -205,7 +205,7 @@ function noteReturnPath(packet) {
         if (fromAddress == myCall) {
             return;
         }
-        heard = heard.filter(function(item) {
+        heard = heard.filter(function(item) { // remove fromAddress from heard
             return item.fromAddress != fromAddress;
         });
         heard.push({
@@ -226,7 +226,7 @@ function noteReturnPath(packet) {
                 if (repeater.endsWith('*')) { // This repeater forwarded this packet.
                     newPath = validateCallSign(
                         'repeater', repeater.substring(0, repeater.length - 1))
-                        + (newPath && ',' + newPath);
+                        + (newPath && ',') + newPath;
                     ++newPathLength;
                 } else {
                     // We received this packet directly from the last repeater (if any).
@@ -234,6 +234,14 @@ function noteReturnPath(packet) {
                 }
             }
         }
+        // Maybe this packet can tell us the repeaters used for an active connection.
+        const connection = allConnections[fromAddress];
+        if (connection && connection.via == undefined // we don't know yet
+            && ['I', 'RR', 'RNR', 'REJ', 'SREJ'].indexOf(packet.type) >= 0)
+        {
+            connection.via = newPath || '';
+        }
+        // Is this path better than the best we've seen so far?
         const best = bestPathTo[fromAddress];
         if (!best || (newPath != best.path && newPathLength <= pathLength(best.path))) {
             bestPathTo[fromAddress] = {path: newPath, counter: 1};
@@ -242,15 +250,11 @@ function noteReturnPath(packet) {
             if ([4, 8, 16, 32].indexOf(best.counter) >= 0) {
                 var current = pathTo[fromAddress];
                 if (current != null && current != best.path) {
-                    if (best.path) {
-                        terminal.writeLine(
-                            `(It looks like sending to ${fromAddress} via ${best.path} would be better than via ${current}.)`
-                        );
-                    } else {
-                        terminal.writeLine(
-                            `(It looks like sending to ${fromAddress} directly would be better than via ${current}.)`
-                        );
-                    }
+                    const viaBest = best.path ? `via ${best.path}` : 'directly';
+                    const viaCurrent = current ? `via ${current}` : 'directly';
+                    terminal.writeLine(
+                        `(Sending to ${fromAddress} ${viaBest} might be better than ${viaCurrent}.)`
+                    );
                 }
             }
         }
@@ -359,7 +363,9 @@ function setCommandMode(newMode) {
         }
         commandMode = newMode;
     }
-    terminal.prompt(commandMode ? commandPrompt : dataPrompt);
+    const newPrompt = commandMode ? commandPrompt : dataPrompt;
+    log.trace('terminal.prompt(%s)', newPrompt);
+    terminal.prompt(newPrompt);
 }
 
 function toRemoteLine(line) {
@@ -435,7 +441,7 @@ function restartServer(newPort) {
     });
     newServer.on('connection', function(connection) {
         const from = connection.remoteAddress.toUpperCase();
-        allConnections[from] = {connection: connection}; // Do we know the repeater path?
+        allConnections[from] = {connection: connection};
         terminal.writeLine(
             `(Received a connection.`
                 + ` The command "c ${from}" will start sending data there.)`);
@@ -726,7 +732,7 @@ function connect(parts) {
     const newConnection = AGWPE.createConnection(options, function() {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-            allConnections[remote] = {connection: newConnection, via: via};
+            allConnections[remote] = {connection: newConnection, via: via || ''};
             connected = newConnection;
             startSendingTo(remote, 'I');
             connected.pipe(new Stream.Writable({
@@ -941,9 +947,9 @@ try {
     terminal.on('error', function(err) {
         terminal.writeLine(err);
     });
-    terminal.on('SIGTERM', process.exit);
+    terminal.on('SIGTERM', process.exit); // exit abruptly
     initialize();
-    ['close', 'SIGINT'].forEach(function(event) {
+    ['close', 'SIGINT'].forEach(function(event) { // exit gracefully
         terminal.on(event, function(info) {
             bye();
         });
