@@ -435,7 +435,7 @@ function restartServer(newPort) {
     });
     newServer.on('connection', function(connection) {
         const from = connection.remoteAddress.toUpperCase();
-        allConnections[from] = connection;
+        allConnections[from] = {connection: connection}; // Do we know the repeater path?
         terminal.writeLine(
             `(Received a connection.`
                 + ` The command "c ${from}" will start sending data there.)`);
@@ -503,7 +503,7 @@ function isDataConnectedToMe(packet) {
         return true;
     }
     var found = Object.keys(allConnections).filter(function(remoteAddress) {
-        return allConnections[remoteAddress].localAddress == packet.toAddress;
+        return allConnections[remoteAddress].connection.localAddress == packet.toAddress;
     });
     return found.length > 0;
 }
@@ -571,6 +571,10 @@ function execute(command) {
         case 'c':
         case 'connect':
             nextCommandMode = !connect(parts);
+            break;
+        case 'c?':
+        case 'connect?':
+            showAllConnections();
             break;
         case 'd':
         case 'disconnect':
@@ -698,15 +702,17 @@ function unproto(parts) {
 
 function connect(parts) {
     const remote = validateCallSign('remote', parts[1]);
-    const via = viaOption(remote, parts);
-    connected = allConnections[remote];
-    if (connected) {
+    const existing = allConnections[remote];
+    if (existing) {
+        connected = existing.connection;
         startSendingTo(remote, 'I');
         if (verbose) {
-            terminal.writeLine(`(Will send I packets to ${remote}.)`);
+            const viaNote = existing.via ? ` via ${existing.via}`: '';
+            terminal.writeLine(`(Will send I packets to ${remote}${viaNote}.)`);
         }
         return true;
     }
+    const via = viaOption(remote, parts);
     const viaNote = via ? ` via ${via}` : '';
     const options = {
         host: host,
@@ -720,7 +726,8 @@ function connect(parts) {
     const newConnection = AGWPE.createConnection(options, function() {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-            connected = allConnections[remote] = newConnection;
+            allConnections[remote] = {connection: newConnection, via: via};
+            connected = newConnection;
             startSendingTo(remote, 'I');
             connected.pipe(new Stream.Writable({
                 write: function _write(chunk, encoding, callback) {
@@ -759,6 +766,14 @@ function connect(parts) {
     return false; // not connected yet. Stay tuned.
 } // connect
 
+function showAllConnections() {
+    Object.keys(allConnections).forEach(function(remoteAddress) {
+        const via = allConnections[remoteAddress].via;
+        const viaNote = via ? ` via ${via}` : '';
+        terminal.writeLine(`connect ${remoteAddress}${viaNote}`);
+    });
+} // showAllConnections
+
 function disconnect(arg) {
     var remote = (arg || '');
     if (!remote && connected) {
@@ -773,7 +788,7 @@ function disconnect(arg) {
             terminal.writeLine(`(You're not connected to ${remote}.)`);
         } else {
             logLine(`> ${remote} DISC`);
-            target.end();
+            target.connection.end();
         }
     }
 } // disconnect
@@ -894,7 +909,7 @@ function bye() {
     try {
         for (var remoteAddress in allConnections) {
             ending = true;
-            allConnections[remoteAddress].end();
+            allConnections[remoteAddress].connection.end();
         }
         if (ending) {
             setTimeout(process.exit, 10 * sec);
