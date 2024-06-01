@@ -234,7 +234,7 @@ function noteReturnPath(packet) {
                 }
             }
         }
-        // Maybe this packet can tell us the repeaters used for an active connection.
+        // Maybe this packet can tell us the repeaters for an active connection.
         const connection = allConnections[fromAddress];
         if (connection && connection.via == undefined // we don't know yet
             && ['I', 'RR', 'RNR', 'REJ', 'SREJ'].indexOf(packet.type) >= 0)
@@ -625,6 +625,7 @@ function execute(command) {
             break;
         case 'b':
         case 'bye':
+            nextCommandMode = false;
             bye();
             break;
         default:
@@ -753,10 +754,13 @@ function connect(parts) {
         delete allConnections[remote];
         if (connected === newConnection) {
             connected = null;
-            setDataPrompt();
-            setCommandMode(true);
+            if (!ending) {
+                setDataPrompt();
+                setCommandMode(true);
+            }
         }
         if (ending && Object.keys(allConnections).length <= 0) {
+            // This was the last connection to be closed.
             process.exit();
         }
     });
@@ -913,12 +917,16 @@ function show(parts) {
 
 function bye() {
     try {
+        dataPrompt = ''; // Don't let our prompt get mixed up with the shell prompt.
+        hasEscaped = true;
+        setCommandMode(false);
         for (var remoteAddress in allConnections) {
             ending = true;
             allConnections[remoteAddress].connection.end();
+            // The 'end' handler for one of the connections will call process.exit.
         }
         if (ending) {
-            setTimeout(process.exit, 10 * sec);
+            setTimeout(process.exit, 20 * sec); // just in case something stalls.
         } else {
             process.exit();
         }
