@@ -60,10 +60,10 @@ function pathLength(path) {
     return path ? path.split(/[\s,]+/).length : 0;
 }
 function normalizePath(p) {
-    return p && p.replace(/\s/g, '').replace(/,+/, ',').toUpperCase();
+    return p && p.replace(/\s/g, '').replace(/,+/g, ',').toUpperCase();
 }
 function validatePath(p) {
-    if (p) p.split(/[\s,]+/).forEach(function(c) {validateCallSign('repeater', c);});
+    if (p) p.split(/[\s,]+/).forEach(function(c) {validateCallSign('digipeater', c);});
 }
 var defaultPath = normalizePath(args['via']);
 
@@ -125,7 +125,7 @@ function parseVia(via) {
     result = '';
     for (var p = 0; p < parts.length; ++p) {
         if (result) result += ',';
-        result += validateCallSign('repeater', parts[p].replace(/\*$/, ''));
+        result += validateCallSign('digipeater', parts[p].replace(/\*$/, ''));
     }
     return result;
 }
@@ -224,8 +224,8 @@ function noteReturnPath(packet) {
             for (var v = 0; v < via.length; ++v) {
                 var repeater = via[v];
                 if (repeater.endsWith('*')) { // This repeater forwarded this packet.
-                    newPath = validateCallSign(
-                        'repeater', repeater.substring(0, repeater.length - 1))
+                    // Insert it into the path:
+                    newPath = repeater.substring(0, repeater.length - 1)
                         + (newPath && ',') + newPath;
                     ++newPathLength;
                 } else {
@@ -242,21 +242,31 @@ function noteReturnPath(packet) {
             connection.via = newPath || '';
         }
         // Is this path better than the best we've seen so far?
-        const best = bestPathTo[fromAddress];
-        if (!best || (newPath != best.path && newPathLength <= pathLength(best.path))) {
-            bestPathTo[fromAddress] = {path: newPath, counter: 1};
-        } else if (newPath == best.path) {
-            best.counter++;
-            if ([4, 8, 16, 32].indexOf(best.counter) >= 0) {
-                var current = pathTo[fromAddress];
-                if (current != null && current != best.path) {
-                    const viaBest = best.path ? `via ${best.path}` : 'directly';
-                    const viaCurrent = current ? `via ${current}` : 'directly';
-                    terminal.writeLine(
-                        `(Sending to ${fromAddress} ${viaBest} might be better than ${viaCurrent}.)`
-                    );
+        for (var target = fromAddress; newPathLength >= 0; --newPathLength) {
+            // log.debug('%s via %s?', target, newPath);
+            const best = bestPathTo[target];
+            // That might be undefined, '' (definitely direct) or a list of repeaters.
+            if (best == undefined || (newPath != best.path && newPathLength <= pathLength(best.path))) {
+                bestPathTo[target] = {path: newPath, counter: 1};
+                log.debug('bestPathTo[%s] = %j', target, bestPathTo[target]);
+            } else if (newPath == best.path) {
+                best.counter++;
+                log.debug('bestPathTo[%s] = %j', target, best);
+                if ([4, 8, 16, 32].indexOf(best.counter) >= 0) {
+                    const current = pathTo[target];
+                    if (current != undefined && current != best.path) {
+                        const viaBest = best.path ? `via ${best.path}` : 'directly';
+                        const viaCurrent = current ? `via ${current}` : 'directly';
+                        terminal.writeLine(
+                            `(Sending to ${target} ${viaBest} might be better than ${viaCurrent}.`);
+                        terminal.writeLine(
+                            ` That path has been heard in ${best.counter} packets.)`);
+                    }
                 }
             }
+            // Next, consider the path to one of the repeaters:
+            target = newPath.replace(/.*,/, '');
+            newPath = (newPathLength == 1) ? '' : newPath.replace(/,[^,]*$/, '');
         }
     } catch(err) {
         log.warn(err);
@@ -307,7 +317,7 @@ function showUsage(exitCode) {
         `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
-        `--via <repeater,...>: a comma-separated list of digipeaters via which to send packets.`,
+        `--via <digipeater,...>: a comma-separated list of digipeaters via which to send packets.`,
         `--show-controls     : show unprintable characters (as string literals). Default: false`,
         `--show-eol          : show end-of-line characters. Default: false`,
         `--show-time         : show the time when data are sent or received. Default: false`,
@@ -489,7 +499,7 @@ function getPathTo(remoteAddress) {
 }
 
 function viaOption(remoteAddress, parts) {
-    // A command line like "c a6call via" specifies no repeaters.
+    // A command line like "c a6call via" specifies no digipeaters.
     // But "c a6call" means use pathTo or besPathTo.
     if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
         return getPathTo(remoteAddress);
@@ -641,7 +651,7 @@ function execute(command) {
                 "d[isconnect] [callsign]",
                 "          : Disconnect from that call sign or (with no call sign) disconnect",
                 "          : from the station to which you're currently connected.",
-                "via [repeater,...]",
+                "via [digipeater,...]",
                 "          : Set the default list of digipeaters via which to communicate with",
                 "          : a new station. If you don't list any digipeaters, the default",
                 "          : will be to communicate directly.",
@@ -804,8 +814,7 @@ function disconnect(arg) {
 } // disconnect
 
 function setVia(parts) {
-    defaultPath = parts[1] && normalizePath(parts[1]);
-    validatePath(defaultPath);
+    defaultPath = validatePath(parts[1] && normalizePath(parts[1]));
 }
 
 function showVia(parts) {
@@ -820,45 +829,32 @@ function showVia(parts) {
     if (remoteAddress) {
         const path = pathTo[remoteAddress];
         if (path != null) {
-            if (path) {
-                messages.push(`The default path to ${remoteAddress} is ${path}.`);
-            } else {
-                messages.push(`The default is to send directly to ${remoteAddress}, without digipeaters.`);
-            }
+            const viaPath = path ? `via ${path}` : 'directly, without digipeaters';
+            messages.push(`The default is to send to ${remoteAddress} ${viaPath}.`);
         }
-        const bestPath = bestPathTo[remoteAddress];
-        if (bestPath && bestPath.path != null) {
+        const best = bestPathTo[remoteAddress];
+        if (best && best.path != null) {
+            const viaBest = best.path ? `via ${best.path}` : 'directly, without digipeaters';
             if (path == null) {
-                if (bestPath.path) {
-                    messages.push(`The default path to ${remoteAddress} is ${bestPath.path}.`);
-                } else {
-                    messages.push(`The default is to send directly to ${remoteAddress}, without digipeaters.`);
-                }
-            } else if (bestPath.counter >= 4
-                       && pathLength(bestPath.path) <= pathLength(path)) {
-                if (bestPath.path) {
-                    messages.push(`It looks like it would be better to communicate`
-                                  + ` with ${remoteAddress} via ${bestPath.path}.`);
-                } else {
-                    messages.push(
-                        `It looks like it would be better to communicate`
-                            + ` with ${remoteAddress} directly, without digipeaters.`);
-                }
+                messages.push(`The default is to send to ${remoteAddress} ${viaBest}.`);
+            } else if (best.counter >= 4 && pathLength(best.path) <= pathLength(path)) {
+                messages.push(`It might be better to send to ${remoteAddress} ${viaBest}.`);
+                messages.push(`That path has been heard in ${best.counter} packets.`);
             }
         }
     }
     if (defaultPath) {
-        messages.push(`The default path to a new station is ${defaultPath}.`);
+        messages.push(`The default is to send via ${defaultPath}.`);
     }
     if (messages.length) {
         messages.forEach(function(message, m) {
-            var line = (m == 0 ? '( ' : '  ')
+            var line = (m == 0 ? '(' : ' ')
                 + message
                 + (m == messages.length - 1 ? ')' : '');
             terminal.writeLine(line);
         });
     } else {
-        terminal.writeLine('(The default is to communicate directly, without digipeaters.)');
+        terminal.writeLine('(The default is to send directly, without digipeaters.)');
     }
 }
 
