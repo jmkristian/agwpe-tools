@@ -73,7 +73,6 @@ const commandPrompt = 'cmd: ';
 var dataPrompt = '';
 var hasEscaped = false;
 var connected = null;
-var connectedBuffer = '';
 var remoteAddress = null;
 var server = null;
 var rawSocket = null;
@@ -402,8 +401,8 @@ function initialize() {
             if (commandMode) {
                 execute(line);
             } else if (connected) {
-                connected.write(toRemoteLine(line), function sent() {
-                    logDataSent('I', line, connected.remoteAddress);
+                connected.connection.write(toRemoteLine(line), function sent() {
+                    logDataSent('I', line, connected.connection.remoteAddress);
                 });
             } else if (remoteAddress) {
                 const via = getPathTo(remoteAddress);
@@ -419,6 +418,7 @@ function initialize() {
                 });
             } else {
                 terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
+                setCommandMode(true);
             }
         } catch(err) {
             log.error(err);
@@ -451,7 +451,7 @@ function restartServer(newPort) {
     });
     newServer.on('connection', function(connection) {
         const from = connection.remoteAddress.toUpperCase();
-        allConnections[from] = {connection: connection};
+        allConnections[from] = {connection: connection, received: ''};
         terminal.writeLine(
             `(Received a connection.`
                 + ` The command "c ${from}" will start sending data there.)`);
@@ -515,7 +515,7 @@ function isDataConnectedToMe(packet) {
     if (packet.type != 'I') { // It's not data.
         return false;
     }
-    if (connected && connected.localAddress == packet.toAddress) {
+    if (connected && connected.connection.localAddress == packet.toAddress) {
         return true;
     }
     var found = Object.keys(allConnections).filter(function(remoteAddress) {
@@ -546,26 +546,6 @@ function onPacket(packet, callback) {
         if (callback) callback();
     } catch(err) {
         log.error(err);
-        if (callback) callback(err);
-    }
-}
-
-function onConnectedData(chunk, encoding, callback) {
-    try {
-        const data = (chunk == null) ? '' : chunk.toString('binary');
-        if (log.trace()) {
-            log.trace('onConnectedData(%s, %s, %s)', escapify(data), encoding, typeof callback);
-        }
-        const remainder = data.replace(eachLine, function(line) {
-            connectedBuffer += shared.decode(Buffer.from(line, 'binary'), remoteEncoding);
-            logLines(`< ${connected.remoteAddress} I `, [connectedBuffer]);
-            connectedBuffer = '';
-            return '';
-        });
-        connectedBuffer += remainder;
-        setDataPrompt();
-        terminal.prompt(dataPrompt, callback);
-    } catch(err) {
         if (callback) callback(err);
     }
 }
@@ -689,7 +669,9 @@ function execute(command) {
 
 function setDataPrompt() {
     if (connected) {
-        dataPrompt = `> ${connected.remoteAddress} I: ${connectedBuffer}`;
+        const partial = !connected.received ? '' :
+              `< ${connected.connection.remoteAddress} I ${connected.received}...`;
+        dataPrompt = `${partial}> ${remoteAddress} I: `;
     } else if (remoteAddress) {
         dataPrompt = `> ${remoteAddress} UI: `;
     } else {
@@ -717,11 +699,47 @@ function unproto(parts) {
     return true;
 } // unproto
 
+class Receiver extends Stream.Writable {
+    constructor(myConnection) {
+        super();
+        this.myConnection = myConnection;
+    }
+    _write(chunk, encoding, callback) {
+        try {
+            const data = (chunk == null) ? '' : chunk.toString('binary');
+            if (log.trace()) {
+                log.trace('onConnectedData(%s, %s, %s)', escapify(data), encoding, typeof callback);
+            }
+            const remoteAddress = this.myConnection.connection.remoteAddress;
+            const that = this;
+            const remainder = data.replace(eachLine, function(partialLine) {
+                const line = that.myConnection.received + partialLine;
+                const decoded = shared.decode(Buffer.from(line, 'binary'), remoteEncoding);
+                logLines(`< ${remoteAddress} I `, [decoded]);
+                that.myConnection.received = '';
+                return '';
+            });
+            this.myConnection.received += remainder;
+            if (this.myConnection === connected) {
+                setDataPrompt();
+            }
+            if (commandMode) {
+                if (callback) callback();
+            } else {
+                terminal.prompt(dataPrompt, callback);
+            }
+        } catch(err) {
+            if (callback) callback(err);
+        }
+    }
+}
+
 function connect(parts) {
     const remote = validateCallSign('remote', parts[1]);
     const existing = allConnections[remote];
     if (existing) {
-        connected = existing.connection;
+        connected = existing;
+        setDataPrompt();
         startSendingTo(remote, 'I');
         if (verbose) {
             const viaNote = existing.via ? ` via ${existing.via}`: '';
@@ -743,14 +761,10 @@ function connect(parts) {
     const newConnection = AGWPE.createConnection(options, function() {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-            allConnections[remote] = {connection: newConnection, via: via || ''};
-            connected = newConnection;
+            const myConnection = {connection: newConnection, via: via || '', received: ''};
+            connected = allConnections[remote] = myConnection;
             startSendingTo(remote, 'I');
-            connected.pipe(new Stream.Writable({
-                write: function _write(chunk, encoding, callback) {
-                    onConnectedData(chunk, encoding, callback);
-                },
-            }));
+            newConnection.pipe(new Receiver(myConnection));
         } catch(err) {
             log.error(err);
         }
@@ -762,7 +776,7 @@ function connect(parts) {
             remoteEncoding);
         logLine(message ? message : `(Disconnected from ${remote}.)`);
         delete allConnections[remote];
-        if (connected === newConnection) {
+        if (connected && (connected.connection === newConnection)) {
             connected = null;
             if (!ending) {
                 setDataPrompt();
@@ -797,7 +811,7 @@ function showAllConnections() {
 function disconnect(arg) {
     var remote = (arg || '');
     if (!remote && connected) {
-        remote = connected.remoteAddress;
+        remote = connected.connection.remoteAddress;
     }
     if (!remote) {
         terminal.writeLine(`(You're not connected.)`);
