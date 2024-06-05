@@ -828,48 +828,53 @@ function disconnect(arg) {
 } // disconnect
 
 function setVia(parts) {
-    defaultPath = validatePath(parts[1] && normalizePath(parts[1]));
+    const newPath = normalizePath(parts[1]);
+    validatePath(newPath);
+    defaultPath = newPath;
 }
 
 function showVia(parts) {
-    if (parts[1] == '*') {
-        terminal.writeLine('pathTo: ' + JSON.stringify(pathTo));
-        terminal.writeLine('bestPathTo: ' + JSON.stringify(bestPathTo));
-        terminal.writeLine('defaultPath: ' + defaultPath);
-        return;
-    }
     const remoteAddress = parts[1] && validateCallSign('remote', parts[1]);
-    var messages = [];
+    var targets = undefined;
     if (remoteAddress) {
-        const path = pathTo[remoteAddress];
+        targets = [remoteAddress];
+    } else {
+        targets = Object.keys(pathTo).concat(Object.keys(bestPathTo)).sort();
+        targets = targets.filter(function(target, t) {
+            return target != targets[t - 1];
+        });
+    }
+    var messages = [];
+    const prefix = targets.length > 1 ?  'Send' : 'The default is to send';
+    if (targets.length > 1) {
+        messages.push('The defaults are:');
+    }
+    targets.forEach(function(target) {
+        const path = pathTo[target];
         if (path != null) {
             const viaPath = path ? `via ${path}` : 'directly, without digipeaters';
-            messages.push(`The default is to send to ${remoteAddress} ${viaPath}.`);
+            messages.push(`${prefix} to ${target} ${viaPath}.`);
         }
-        const best = bestPathTo[remoteAddress];
+        const best = bestPathTo[target];
         if (best && best.path != null) {
             const viaBest = best.path ? `via ${best.path}` : 'directly, without digipeaters';
             if (path == null) {
-                messages.push(`The default is to send to ${remoteAddress} ${viaBest}.`);
+                messages.push(`${prefix} to ${target} ${viaBest}.`);
             } else if (best.counter >= 4 && pathLength(best.path) <= pathLength(path)) {
-                messages.push(`It might be better to send to ${remoteAddress} ${viaBest}.`);
+                messages.push(`It might be better to send to ${target} ${viaBest}.`);
                 messages.push(`That path has been heard in ${best.counter} packets.`);
             }
         }
-    }
+    })
+    const lastNote = messages.length == 0 ? 'The default is to send' : 'Otherwise send';
     if (defaultPath) {
-        messages.push(`The default is to send via ${defaultPath}.`);
-    }
-    if (messages.length) {
-        messages.forEach(function(message, m) {
-            var line = (m == 0 ? '(' : ' ')
-                + message
-                + (m == messages.length - 1 ? ')' : '');
-            terminal.writeLine(line);
-        });
+        messages.push(`${lastNote} via ${defaultPath}.`);
     } else {
-        terminal.writeLine('(The default is to send directly, without digipeaters.)');
+        messages.push(`${lastNote} directly, without digipeaters.`);
     }
+    messages.forEach(function(message) {
+        terminal.writeLine(message);
+    });
 }
 
 function showHidden() {
