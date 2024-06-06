@@ -14,7 +14,8 @@ const validateCallSign = AGWPE.validateCallSign;
 const args = minimist(process.argv.slice(2), {
     'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'show-timestamp', 'timestamp',
                 'trace', 'verbose', 'v'],
-    'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport', 'via'],
+    'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport',
+               'xecute', 'x'],
 });
 const log = Bunyan.createLogger({
     name: 'chatter',
@@ -65,7 +66,7 @@ function normalizePath(p) {
 function validatePath(p) {
     if (p) p.split(/[\s,]+/).forEach(function(c) {validateCallSign('digipeater', c);});
 }
-var defaultPath = normalizePath(args['via']);
+var defaultPath = undefined;
 
 const terminal = new Lines(ESC);
 var commandMode = true;
@@ -316,11 +317,11 @@ function showUsage(exitCode) {
         `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
-        `--via <digipeater,...>: a comma-separated list of digipeaters via which to send packets.`,
-        `--show-controls     : show unprintable characters (as string literals). Default: false`,
-        `--show-eol          : show end-of-line characters. Default: false`,
-        `--show-time         : show the time when data are sent or received. Default: false`,
-        `--verbose           : show more information about what's happening. Default: false`,
+        `--xecute "line;..." : Execute a sequence of command lines immediately.`,
+        `--show-controls     : Show unprintable characters (as string literals). Default: false`,
+        `--show-eol          : Show end-of-line characters. Default: false`,
+        `--show-time         : Show the time when data are sent or received. Default: false`,
+        `--verbose           : Show more information about what's happening. Default: false`,
         `--eol <string>      : represents end-of-line in data sent or received. Default: CR`,
         `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
         `--encoding <string> : encoding of characters sent or received. Default: ISO-8859-1`,
@@ -386,45 +387,33 @@ function logDataSent(packetType, lines, remoteAddress, via) {
              lines.split(allOS_EOLs).map(escapify));
 }
 
-function initialize() {
-    setDataPrompt();
-    setCommandMode(!remoteAddress);
-    terminal.on('escape', function() {
-        if (commandMode && !(connected || remoteAddress)) {
-            terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
+function interpret(line) {
+    try {
+        if (commandMode) {
+            execute(line);
+        } else if (connected) {
+            connected.connection.write(toRemoteLine(line), function sent() {
+                logDataSent('I', line, connected.connection.remoteAddress);
+            });
+        } else if (remoteAddress) {
+            const via = getPathTo(remoteAddress);
+            rawSocket.write({
+                port: tncPort,
+                type: 'UI',
+                toAddress: remoteAddress,
+                fromAddress: myCall,
+                via: via || undefined,
+                info: toRemoteLine(line),
+            }, function sent() {
+                logDataSent('UI', line, remoteAddress, via);
+            });
         } else {
-            setCommandMode(!commandMode);
+            terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
+            setCommandMode(true);
         }
-    });
-    terminal.on('line', function(line) {
-        try {
-            if (commandMode) {
-                execute(line);
-            } else if (connected) {
-                connected.connection.write(toRemoteLine(line), function sent() {
-                    logDataSent('I', line, connected.connection.remoteAddress);
-                });
-            } else if (remoteAddress) {
-                const via = getPathTo(remoteAddress);
-                rawSocket.write({
-                    port: tncPort,
-                    type: 'UI',
-                    toAddress: remoteAddress,
-                    fromAddress: myCall,
-                    via: via || undefined,
-                    info: toRemoteLine(line),
-                }, function sent() {
-                    logDataSent('UI', line, remoteAddress, via);
-                });
-            } else {
-                terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
-                setCommandMode(true);
-            }
-        } catch(err) {
-            log.error(err);
-        }
-    });
-    restartServer(tncPort);
+    } catch(err) {
+        log.error(err);
+    }
 }
 
 function restartServer(newPort) {
@@ -971,12 +960,24 @@ try {
         terminal.writeLine(err);
     });
     terminal.on('SIGTERM', process.exit); // exit abruptly
-    initialize();
     ['close', 'SIGINT'].forEach(function(event) { // exit gracefully
         terminal.on(event, function(info) {
             bye();
         });
     });
+    terminal.on('escape', function() {
+        if (commandMode && !(connected || remoteAddress)) {
+            terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
+        } else {
+            setCommandMode(!commandMode);
+        }
+    });
+    setDataPrompt();
+    setCommandMode(!remoteAddress);
+    restartServer(tncPort);
+    const first = args.xecute || args.x;
+    if (first) first.split(';').forEach(interpret);
+    terminal.on('line', interpret);
 } catch(err) {
     log.error(err);
     showUsage(1);
