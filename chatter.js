@@ -32,7 +32,7 @@ var remoteEOL = undefined;
 var allRemoteEOLs = undefined;
 var eachLine = undefined;
 var remoteEncoding = shared.encodingName('iso-8859-1');
-var showAll = false;
+var showRepeats = false;
 var showTime = false;
 
 var allConnections = {};
@@ -114,7 +114,7 @@ const lastPacketBetween = {};
 const sec = 1000;
 const maxRepetitionTime = 15 * sec;
 
-function isRepetitive(packet) {
+function hideRepeat(packet) {
     try {
         const now = Date.now();
         const key = validateCallSign('source', packet.fromAddress)
@@ -126,9 +126,9 @@ function isRepetitive(packet) {
               + (packet.info ? ' ' + packet.info.toString('binary') : '');
         if (!recent || recent.packet != current) {
             lastPacketBetween[key] = {packet: current, when: now};
-        } else if (now - recent.when <= maxRepetitionTime) {
+        } else if (now - recent.when <= maxRepetitionTime) { // repetitive
             recent.when = now;
-            return true; // repetitive
+            return !showRepeats;
         }
         if (now - lastPurgeBetween > 120 * sec) {
             lastPurgeBetween = now;
@@ -141,7 +141,7 @@ function isRepetitive(packet) {
     } catch(err) {
         log.warn(err);
     }
-    return false;
+    return false; // show this packet
 }
 
 function arraysEqual(a, b) {
@@ -498,11 +498,10 @@ function onPacket(packet, callback) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (!(isRepetitive(packet) // Call isRepetitive first for its side effect.
+            if (!(hideRepeat(packet) // Call this first for its side effect.
                   || hiddenTypes[packet.type]
                   || hiddenSources[packet.fromAddress]
-                  || hiddenDestinations[packet.toAddress])
-                || showAll)
+                  || hiddenDestinations[packet.toAddress]))
             {
                 // Don't log data received on an active connection:
                 if (!isDataConnectedToMe(packet)) {
@@ -634,11 +633,12 @@ function showCommands(preamble) {
         "hide?     : Show which packets are currently hidden.",
         "show [<fromCall >toCall ...]",
         "          : Resume showing things that were previously hidden.", 
-        "show all  : Show all received packets, regardless of their addresses.",
         "show time : Show the time when data are sent or received.",
         "show eol  : Show end-of-line characters.",
         "show control",
         "          : Show unprintable characters (as string literals).",
+        "show repeats",
+        "          : Show packets that are heard repeatedly.",
         "set encoding <string>",
         "          : encoding of characters sent or received. Default: ISO-8859-1",
         "          : Other supported encodings are Windows-1252 and UTF-8.",
@@ -854,35 +854,36 @@ function showVia(parts) {
 }
 
 function showHidden() {
-    if (!(showTime && showEOL && showControls)) {
+    if (!(showTime && showEOL && showControls && showRepeats)) {
         var line = 'hide';
         if (!showTime) line += ' time';
         if (!showEOL) line += ' eol';
         if (!showControls) line += ' control';
+        if (!showRepeats) line += ' repeats';
         terminal.writeLine(line);
     }
-    if (!showAll) {
-        var keys = Object.keys(hiddenTypes);
-        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-            return `.${key}`;
-        }).join(' '));
-        keys = Object.keys(hiddenDestinations);
-        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-            return `>${key}`;
-        }).join(' '));
-        keys = Object.keys(hiddenSources);
-        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-            return `<${key}`;
-        }).join(' '));
-    }
+    var keys = Object.keys(hiddenTypes);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `.${key}`;
+    }).join(' '));
+    keys = Object.keys(hiddenDestinations);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `>${key}`;
+    }).join(' '));
+    keys = Object.keys(hiddenSources);
+    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+        return `<${key}`;
+    }).join(' '));
 }
 
 function hide(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
         switch(part.toLowerCase()) {
-        case 'all':
-            showAll = false;
+        case 'repeat':
+        case 'repeats':
+        case 'repeated':
+            showRepeats = false;
             break;
         case 'controls':
         case 'control':
@@ -919,8 +920,10 @@ function show(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
         switch(part.toLowerCase()) {
-        case 'all':
-            showAll = true;
+        case 'repeat':
+        case 'repeats':
+        case 'repeated':
+            showRepeats = true;
             break;
         case 'controls':
         case 'control':
