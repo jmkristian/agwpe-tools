@@ -4,6 +4,7 @@
     stdout. A simple command mode enables sending and receiving files.
  */
 "use strict";
+const AGWPE = require('@jmkristian/node-agwpe');
 const OS = require('os');
 const Stream = require('stream');
 const util = require('util');
@@ -25,12 +26,6 @@ const LogNothing = {
     error: function(){},
     fatal: function(){},
 };
-
-function newError(message, code) {
-    const err = new Error(message);
-    if (code) err.code = code;
-    return err;
-}
 
 function hexByte(from) {
     return ((from >> 4) & 0x0F).toString(16) + (from & 0x0F).toString(16)
@@ -188,8 +183,10 @@ const specialWindows1252 = new RegExp('[' + Object.keys(encodeWindows1252).join(
 
 /** Decode a string from a Buffer. */
 function decode(buffer, encoding) {
-    if (!buffer) {
-        return buffer;
+    if (buffer == null) {
+        return null;
+    } else if (!Buffer.isBuffer(buffer)) {
+        throw AGWPE.newTypeError(`decode(${typeof buffer}`);
     } else if (encoding == 'windows-1252') {
         return buffer.toString('binary')
             .replace(/[\u0080-\u009F]/g, function(c) {
@@ -386,6 +383,5 @@ exports.hexByte = hexByte;
 exports.localEncoding = localEncoding;
 exports.logChunk = logChunk;
 exports.messageFromAGW = messageFromAGW;
-exports.newError = newError;
 exports.Tee = Tee;
 exports.validateEncoding = validateEncoding;

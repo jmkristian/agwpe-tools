@@ -48,35 +48,38 @@ For example, see [Polling a BBS](BBS_polling.md).
 ### Chatter on Windows
 
 You can download and run chatter.exe the same way.
-To see a summary of its command line options, run `.\chatter.exe` (with no arguments).
-After you start it with your call sign, enter the command '?' to see
-a summary of all its commands.
+To see a summary of its command line options,
+run `.\chatter.exe` (with no arguments).
+To get started using it, run:
+
+`.\chatter.exe <your call sign>`
+
+Then enter `?` to see a summary of all the commands.
+
+To send data, enter an `unproto` or `connect` command;
+then type the data you want to send.
 
 Chatter outputs a summary of all the data that AGWPE receives.
 You can filter out some of the data using `hide` and `show` commands.
 
-To send data, either give the destination call sign on the command line
-(after your call sign)
-or run an `unproto` or `connect` command.
-Then type the data you want to send.
-
-Chatter hides repetitive packets, by default.
-Usually this means packets that are retransmitted by repeaters.
+By default, chatter hides packets that it hears repeatedly.
+Usually this means packets that are retransmitted by digipeaters.
 In general, it won't show a packet that's
-the same (except for repeaters) as another packet it heard recently.
-To see the repetitive packets, add --verbose to the command line.
+the same (except for digipeaters) as another packet it heard recently.
+To see the repetitive packets, enter the command `show all`.
 
 If you don't specify the 'via' option to 'connect' or 'unproto' commands,
-chatter will try to use the best sequence of repeaters.
+chatter will try to use a short sequence of digipeaters.
 To do this, it listens to all packets,
-observes the repeaters that other stations use
-and picks out the shortest sequence that it heard directly from a repeater.
-If it hears directly from a source station, it will choose no repeaters.
-Of course, it takes time to build up this information by hearing packets.
-If you know the right repeaters,
-use the 'via' command to set the default for all stations,
+observes the digipeaters that other stations use
+and picks out the shortest sequence that it heard directly from a digipeater.
+If it hears directly from a source station,
+it will send to that station directly, without using digipeaters.
+This system depends on hearing packets, so it doesn't work immediately.
+If you know the right digipeaters to use,
+use the `via` command to set the default for all stations,
 or specify a 'via' option to a 'connect' or 'unproto' command.
-Then chatter will use the repeaters you specify.
+Chatter will use the digipeaters you specify.
 It might suggest a shorter sequence if it hears one repeatedly,
 but it won't override your choice.
 
@@ -100,7 +103,7 @@ To get started:
 5. Start your TNC (e.g. Direwolf).
 6. Run one of the programs, either:
    - `node ./converse.js --verbose <your call sign> <remote call sign>`
-   - `node ./chatter.js --verbose <your call sign>`
+   - `node ./chatter.js <your call sign>`
 
 To see a summary of the command line options, run either program with no arguments.
 

@@ -13,7 +13,6 @@ class FileHelper extends Stream.Writable {
             decodeStrings: false, // Don't convert strings to bytes
         });
         this.lines = lines;
-        this.ESC = lines.ESC;
         this.buffer = '';
     }
 
@@ -34,7 +33,7 @@ class FileHelper extends Stream.Writable {
                 case '\x15': // Ctrl+U erase buffer
                     this.buffer = '';
                     break;
-                case this.ESC:
+                case this.lines.ESC:
                     this.buffer = '';
                     this.lines.emit('escape');
                     break;
@@ -64,9 +63,8 @@ class StdHelper extends Stream.Writable {
         });
         this.lines = lines;
         this.stdout = stdout;
-        this.ESC = lines.ESC;
         this.buffer = '';
-        this.prefix = '';
+        this.prompt = '';
         this.INT = shared.INT;
         this.TERM = shared.TERM;
         const specials = [this.INT, this.TERM].filter(function(c) {return c;});
@@ -87,13 +85,13 @@ class StdHelper extends Stream.Writable {
         });
     }
 
-    prompt(prefix, callback) {
-        if (this.prefix == prefix) {
+    setPrompt(prompt, callback) {
+        if (this.prompt == prompt) {
             if (callback) callback();
         } else {
-            const newPrefix = prefix ? prefix.toString() : '';
-            const oldLength = this.prefix.length + this.buffer.length;
-            const newLength = newPrefix.length + this.buffer.length;
+            const newPrompt = prompt ? prompt.toString() : '';
+            const oldLength = this.prompt.length + this.buffer.length;
+            const newLength = newPrompt.length + this.buffer.length;
             var output = '';
             for (var b = oldLength; b > newLength; --b) {
                 output += '\b \b';
@@ -101,8 +99,8 @@ class StdHelper extends Stream.Writable {
             for (; b > 0; --b) {
                 output += '\b';
             }
-            this.prefix = newPrefix;
-            output += this.prefix + this.buffer;
+            this.prompt = newPrompt;
+            output += this.prompt + this.buffer;
             this.stdout.write(output, callback);
         }
     }
@@ -122,7 +120,7 @@ class StdHelper extends Stream.Writable {
     writeLine(chunk, callback) {
         const line = chunk ? chunk.toString() : '';
         var output = '';
-        var b = this.prefix.length + this.buffer.length;
+        var b = this.prompt.length + this.buffer.length;
         // Erase part of the buffered line:
         for (; b > line.length; --b) {
             output += '\b \b';
@@ -132,7 +130,7 @@ class StdHelper extends Stream.Writable {
             output += '\b';
         }
         output += line // Over-write the buffered line with the new line,
-            + OS.EOL + this.prefix + this.buffer; // and restore the buffered line.
+            + OS.EOL + this.prompt + this.buffer; // and restore the buffered line.
         this.stdout.write(output, callback);
     }
 
@@ -170,7 +168,7 @@ class StdHelper extends Stream.Writable {
             case '\r':
                 this.emitBuffer();
                 break;
-            case this.ESC:
+            case this.lines.ESC:
                 this.clearBuffer();
                 this.lines.emit('escape');
                 break;
@@ -203,9 +201,14 @@ class Lines extends EventEmitter {
         process.stdin.pipe(this.std);
     }
 
-    /** Use this prefix to prompt the user for input. */
-    prompt(prefix, callback) {
-        this.std.prompt(prefix, callback);
+    /** Emit an 'escape' event when the user types this character. */
+    setEscape(escape) {
+        this.ESC = escape;
+    }
+
+    /** Use this to prompt the user for input. */
+    setPrompt(prompt, callback) {
+        this.std.setPrompt(prompt, callback);
     }
 
     /** Show a line to the user. */

@@ -12,32 +12,28 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'show-controls', 'show-eol', 'show-time', 'show-timestamp', 'timestamp',
-                'trace', 'verbose', 'v'],
-    'string': ['encoding', 'eol', 'escape', 'hide-eol', 'port', 'tnc-port', 'tncport',
-               'xecute', 'x'],
+    'boolean': ['debug', 'trace'],
+    'string': ['host', 'port', 'tnc-port', 'tncport', 'frame-length'],
 });
 const log = Bunyan.createLogger({
     name: 'chatter',
     level: args.trace ? Bunyan.TRACE : args.debug ? Bunyan.DEBUG : Bunyan.INFO,
     stream: bunyanFormat({outputMode: 'short', color: false}, process.stderr),
 });
-const controlCharacters = new RegExp('[\x00-\x1F]|[\x7F-\u00A0]', 'g');
-const ESC = (args.escape == undefined) ? '\x1D' // GS = Ctrl+]
-      : shared.fromASCII(args.escape);
+const allControls = new RegExp('[\x00-\x1F]|[\x7F-\u00A0]', 'g');
+const allOS_EOLs = new RegExp(OS.EOL, 'g');
+var escape = '\x1D'; // GS = Ctrl+]
 const frameLength = parseInt(args['frame-length'] || '128');
 const host = args.host || '127.0.0.1'; // localhost, IPv4
 const port = args.port || args.p || 8000;
-const showControls = args['show-controls'];
-const showEOL = args['show-eol'];
-const remoteEOL = shared.fromASCII(args.eol) || '\r';
-const allRemoteEOLs = new RegExp(remoteEOL, 'g');
-const allOS_EOLs = new RegExp(OS.EOL, 'g');
-const eachLine = new RegExp('.*' + remoteEOL, 'g');
-const remoteEncoding = shared.encodingName((args.encoding || 'ISO-8859-1').toLowerCase());
-const decodedEOL = shared.decode(remoteEOL, remoteEncoding);
-const verbose = args.verbose || args.v;
-const showTime = args['show-time'] || args['show-timestamp'] || args['timestamp'];
+var showControls = false;
+var showEOL = false;
+var remoteEOL = undefined;
+var allRemoteEOLs = undefined;
+var eachLine = undefined;
+var remoteEncoding = shared.encodingName('iso-8859-1');
+var showAll = false;
+var showTime = false;
 
 var allConnections = {};
 var bestPathTo = {};
@@ -68,7 +64,7 @@ function validatePath(p) {
 }
 var defaultPath = undefined;
 
-const terminal = new Lines(ESC);
+const terminal = new Lines(escape);
 var commandMode = true;
 const commandPrompt = 'cmd: ';
 var dataPrompt = '';
@@ -82,15 +78,15 @@ var ending = false;
 /** Convert s to a javascript string literal (without the quotation marks.) */
 function escapify(s) {
     var result = (s == null) ? '' : s.toString('binary');
-    if (!showControls) {
-        return result.replace(controlCharacters, '');
-    }
     if (!showEOL) result = result.replace(allRemoteEOLs, '');
+    if (!showControls) result = result.replace(allControls, function(c) {
+        return (c == remoteEOL) ? c : '';
+    });
     return result
         .replace(/\\/g, '\\\\')
         .replace(/\r/g, '\\r')
         .replace(/\n/g, '\\n')
-        .replace(controlCharacters, function(c) {
+        .replace(allControls, function(c) {
             const code = c.charCodeAt(0);
             if (code <= 0xFF) {
                 return '\\x' + (code + 0x100).toString(16).substring(1).toUpperCase();
@@ -98,23 +94,6 @@ function escapify(s) {
                 return '\\u' + (code + 0x100000).toString(16).substring(2).toUpperCase();
             }
         });
-}
-
-function splitLines(from) {
-    if (from == null) return from;
-    if (from == '') return [from];
-    var into = [];
-    var last = null;
-    from.split(remoteEOL).forEach(function(line) {
-        into.push(line + (showEOL ? remoteEOL : ''));
-        last = line;
-    });
-    if (last == '') {
-        into.pop();
-    } else {
-        into[into.length - 1] = last; // without remoteEOL
-    }
-    return into;
 }
 
 function parseVia(via) {
@@ -292,7 +271,7 @@ function logLine(line, callback) {
 }
 
 function logLines(prefix, lines, callback) {
-    log.trace('logLines(%s, %s, %s)', prefix, lines && lines.length, typeof callback);
+    log.trace('logLines(%s, %j, %s)', prefix, lines, typeof callback);
     var next = 0;
     const logNextLine = function logNextLine(err) {
         if (err) {
@@ -312,20 +291,11 @@ function showUsage(exitCode) {
     const myName = arg0 + ((arg0 == 'chatter.exe') ? '' : (' ' + path.basename(process.argv[1])));
     process.stderr.write([
         '', // blank line
-        `usage: ${myName} [options] <local call sign> [remote call sign]`,
+        `Usage: ${myName} [options] <local call sign> [command command ...]`,
         `Supported options are:`,
         `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
         `--port N            : TCP port of the TNC. Default: 8000`,
         `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
-        `--xecute "line;..." : Execute a sequence of command lines immediately.`,
-        `--show-controls     : Show unprintable characters (as string literals). Default: false`,
-        `--show-eol          : Show end-of-line characters. Default: false`,
-        `--show-time         : Show the time when data are sent or received. Default: false`,
-        `--verbose           : Show more information about what's happening. Default: false`,
-        `--eol <string>      : represents end-of-line in data sent or received. Default: CR`,
-        `--escape <character>: switches between sending data and entering a command. Default: Ctrl+]`,
-        `--encoding <string> : encoding of characters sent or received. Default: ISO-8859-1`,
-        `                      Other supported encodings are Windows-1252 and UTF-8.`,
         '',
     ].join(OS.EOL));
     if (exitCode != null) process.exit(exitCode);
@@ -358,33 +328,43 @@ function logPacketReceived(packet, callback) {
         marker += ' via ' + via.join(',');
     }
     marker += ` ${packet.type} `;
-    logLines(marker,
-             splitLines(shared.decode(packet.info || '', remoteEncoding)),
-             callback);
+    const info = shared.decode(packet.info, remoteEncoding) || '';
+    var lines = [];
+    var last = null;
+    info.split(remoteEOL).forEach(function(line) {
+        last = line;
+        lines.push(line + remoteEOL);
+    });
+    if (lines.length > 1 && last == '') {
+        lines.pop(); // info ended with remoteEOL
+    } else {
+        lines[lines.length - 1] = last; // without remoteEOL
+    }
+    logLines(marker, lines, callback);
 }
 
 function setCommandMode(newMode) {
     if (commandMode != newMode) {
         if (commandMode && !hasEscaped) {
             hasEscaped = true;
-            terminal.writeLine('(Type data to send'
-                               + (ESC ? `, or ${shared.controlify(ESC)} to enter a command` : '')
+            terminal.writeLine(`(Enter data to send to ${remoteAddress}`
+                               + (escape ? `, or ${shared.controlify(escape)} to enter a command` : '')
                                + '.)');
         }
         commandMode = newMode;
     }
     const newPrompt = commandMode ? commandPrompt : dataPrompt;
-    log.trace('terminal.prompt(%s)', newPrompt);
-    terminal.prompt(newPrompt);
+    log.trace('terminal.setPrompt(%s)', newPrompt);
+    terminal.setPrompt(newPrompt);
 }
 
 function toRemoteLine(line) {
-    return shared.encode(line + decodedEOL, remoteEncoding);
+    return shared.encode(line + remoteEOL, remoteEncoding);
 }
 
-function logDataSent(packetType, lines, remoteAddress, via) {
+function logLineSent(packetType, line, remoteAddress, via) {
     logLines(`> ${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `,
-             lines.split(allOS_EOLs).map(escapify));
+             [shared.decode(line, remoteEncoding)]);
 }
 
 function interpret(line) {
@@ -392,20 +372,22 @@ function interpret(line) {
         if (commandMode) {
             execute(line);
         } else if (connected) {
-            connected.connection.write(toRemoteLine(line), function sent() {
-                logDataSent('I', line, connected.connection.remoteAddress);
+            var lineSent = toRemoteLine(line);
+            connected.connection.write(lineSent, function sent() {
+                logLineSent('I', lineSent, connected.connection.remoteAddress);
             });
         } else if (remoteAddress) {
             const via = getPathTo(remoteAddress);
+            var lineSent = toRemoteLine(line);
             rawSocket.write({
                 port: tncPort,
                 type: 'UI',
                 toAddress: remoteAddress,
                 fromAddress: myCall,
                 via: via || undefined,
-                info: toRemoteLine(line),
+                info: lineSent,
             }, function sent() {
-                logDataSent('UI', line, remoteAddress, via);
+                logLineSent('UI', lineSent, remoteAddress, via);
             });
         } else {
             terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
@@ -455,9 +437,7 @@ function restartServer(newPort) {
         } else {
             tncPort = newPort;
             server = newServer;
-            if (verbose) {
-                terminal.writeLine(`(Listening to TNC port ${newPort}.)`);
-            }
+            terminal.writeLine(`(Listening to TNC port ${newPort}.)`);
             const newSocket = newServer.createSocket();
             ['close', 'end', 'error', 'timeout'].forEach(function(event) {
                 newSocket.on(event, function(err) {
@@ -518,11 +498,11 @@ function onPacket(packet, callback) {
         log.trace('onPacket(%s)', packet);
         if (packet.port == tncPort) {
             noteReturnPath(packet);
-            if (verbose
-                || !(isRepetitive(packet) // Call isRepetitive first for its side effect.
-                     || hiddenTypes[packet.type]
-                     || hiddenSources[packet.fromAddress]
-                     || hiddenDestinations[packet.toAddress]))
+            if (!(isRepetitive(packet) // Call isRepetitive first for its side effect.
+                  || hiddenTypes[packet.type]
+                  || hiddenSources[packet.fromAddress]
+                  || hiddenDestinations[packet.toAddress])
+                || showAll)
             {
                 // Don't log data received on an active connection:
                 if (!isDataConnectedToMe(packet)) {
@@ -590,6 +570,9 @@ function execute(command) {
         case 'hidden?':
             showHidden();
             break;
+        case 'set':
+            set(parts);
+            break;
         case 'x':
         case 'xecute':
         case 'execute':
@@ -607,46 +590,12 @@ function execute(command) {
             nextCommandMode = false;
             bye();
             break;
+        case '?':
+        case 'help':
+            showCommands();
+            break;
         default:
-            terminal.writeLine(command + '?');
-            [
-                "The available commands are:",
-                "u[nproto] callsign [via callsign,...]",
-                "          : Send the following data in UI packets to that call sign via",
-                "          : those digipeaters.",
-                "c[onnect] callsign [via callsign,...]",
-                "          : Send the following data in a connection to that call sign via",
-                "          : those digipeaters.",
-                "d[isconnect] [callsign]",
-                "          : Disconnect from that call sign or (with no call sign) disconnect",
-                "          : from the station to which you're currently connected.",
-                "via [digipeater,...]",
-                "          : Set the default list of digipeaters via which to communicate with",
-                "          : a new station. If you don't list any digipeaters, the default",
-                "          : will be to communicate directly.",
-                "via? [callsign]",
-                "          : Show the current and default digipeaters via which to communicate",
-                "          : with that call sign or (with no call sign) a new call sign.",
-                "x[ecute] fileName",
-                "          : Read a file and interpret it like input that you type.",
-                "heard",
-                "          : Show a list of source addresses received recently.",
-                "hear number",
-                "          : Set the maximum number of source addresses to remember.",
-                "hide [<fromCall >toCall ...]",
-                "          : Stop showing packets addressed from: fromCall or to: toCall.",
-                "show [<fromCall >toCall ...]",
-                "          : Resume showing packets addressed from: fromCall or to: toCall.",
-                "hide?",
-                "          : Show which packets are currently hidden.",
-                "b[ye]",
-                "          : Close all connections and exit.",
-                "",
-                "Commands are not case-sensitive.",
-
-            ].forEach(function(line) {
-                terminal.writeLine(line);
-            });
+            showCommands(`${JSON.stringify(parts[0])} isn't a command. `);
         }
     } catch(err) {
         if (log.debug()) log.debug(err);
@@ -655,6 +604,56 @@ function execute(command) {
     }
     setCommandMode(nextCommandMode);
 } // execute
+
+function showCommands(preamble) {
+    [
+        `${preamble || ''}The available commands are:`,
+        "u[nproto] callSign [via callSign,...]",
+        "          : Send the following data in UI packets to that call sign via",
+        "          : those digipeaters.",
+        "c[onnect] callSign [via callSign,...]",
+        "          : Send the following data in a connection to that call sign via",
+        "          : those digipeaters.",
+        "d[isconnect] [callSign]",
+        "          : Disconnect from that call sign or (with no call sign) disconnect",
+        "          : from the station to which you're currently connected.",
+        "via [digipeater,...]",
+        "          : Set the default list of digipeaters via which to communicate with",
+        "          : a new station. If you don't list any digipeaters, the default",
+        "          : will be to communicate directly.",
+        "via? [callSign]",
+        "          : Show the current and default digipeaters via which to communicate",
+        "          : with that call sign or (with no call sign) a new call sign.",
+        "x[ecute] fileName",
+        "          : Read a file and interpret it like input that you type.",
+        "heard     : Show a list of source addresses received recently.",
+        "hear number",
+        "          : Set the maximum number of source addresses to remember.",
+        "hide [<fromCall >toCall ...]",
+        "          : Stop showing packets addressed from: fromCall or to: toCall.",
+        "hide?     : Show which packets are currently hidden.",
+        "show [<fromCall >toCall ...]",
+        "          : Resume showing things that were previously hidden.", 
+        "show all  : Show all received packets, regardless of their addresses.",
+        "show time : Show the time when data are sent or received.",
+        "show eol  : Show end-of-line characters.",
+        "show control",
+        "          : Show unprintable characters (as string literals).",
+        "set encoding <string>",
+        "          : encoding of characters sent or received. Default: ISO-8859-1",
+        "          : Other supported encodings are Windows-1252 and UTF-8.",
+        "set eol <string>",
+        "          : represents end-of-line in data sent or received. Default: CR",
+        "set escape <character>",
+        "          : switches between commands and sending data. Default: Ctrl+]",
+        "b[ye]     : Close all connections and exit.",
+        "",
+        "Commands are not case-sensitive.",
+
+    ].forEach(function(line) {
+        terminal.writeLine(line);
+    });
+}
 
 function setDataPrompt() {
     if (connected) {
@@ -681,41 +680,36 @@ function unproto(parts) {
     const via = viaOption(remote, parts);
     connected = null; // but it remains in allConnections.
     startSendingTo(remote, 'UI');
-    if (verbose) {
-        const viaNote = via ? ` via ${via}` : '';
-        terminal.writeLine(`(Will send UI packets${viaNote} to ${remote}.)`);
-    }
     return true;
 } // unproto
 
 class Receiver extends Stream.Writable {
-    constructor(myConnection) {
+    constructor(connection) {
         super();
-        this.myConnection = myConnection;
+        this.connection = connection;
     }
     _write(chunk, encoding, callback) {
         try {
-            const data = (chunk == null) ? '' : chunk.toString('binary');
-            if (log.trace()) {
-                log.trace('onConnectedData(%s, %s, %s)', escapify(data), encoding, typeof callback);
-            }
-            const remoteAddress = this.myConnection.connection.remoteAddress;
-            const that = this;
-            const remainder = data.replace(eachLine, function(partialLine) {
-                const line = that.myConnection.received + partialLine;
-                const decoded = shared.decode(Buffer.from(line, 'binary'), remoteEncoding);
-                logLines(`< ${remoteAddress} I `, [decoded]);
-                that.myConnection.received = '';
-                return '';
-            });
-            this.myConnection.received += remainder;
-            if (this.myConnection === connected) {
-                setDataPrompt();
-            }
-            if (commandMode) {
-                if (callback) callback();
-            } else {
-                terminal.prompt(dataPrompt, callback);
+            if (chunk && chunk.length > 0) {
+                const data = this.connection.received + chunk.toString('binary');
+                if (log.trace()) {
+                    log.trace('onConnectedData(%s, %s, %s)', escapify(data), encoding, typeof callback);
+                }
+                const remoteAddress = this.connection.connection.remoteAddress;
+                this.connection.received = data.replace(eachLine, function(line) {
+                    logLines(`< ${remoteAddress} I `, [
+                        shared.decode(Buffer.from(line, 'binary'), remoteEncoding)
+                    ]);
+                    return '';
+                });
+                if (this.connection === connected) {
+                    setDataPrompt();
+                }
+                if (commandMode) {
+                    if (callback) callback();
+                } else {
+                    terminal.setPrompt(dataPrompt, callback);
+                }
             }
         } catch(err) {
             if (callback) callback(err);
@@ -730,10 +724,6 @@ function connect(parts) {
         connected = existing;
         setDataPrompt();
         startSendingTo(remote, 'I');
-        if (verbose) {
-            const viaNote = existing.via ? ` via ${existing.via}`: '';
-            terminal.writeLine(`(Will send I packets to ${remote}${viaNote}.)`);
-        }
         return true;
     }
     const via = viaOption(remote, parts);
@@ -759,11 +749,8 @@ function connect(parts) {
         }
     });
     newConnection.on('end', function(info) {
-        const message = shared.decode(
-            showEOL ? info : !info ? ''
-                : info.toString('binary').replace(allRemoteEOLs, ''),
-            remoteEncoding);
-        logLine(message ? message : `(Disconnected from ${remote}.)`);
+        const message = info && escapify(shared.decode(info, remoteEncoding));
+        logLine(message || `(Disconnected from ${remote}.)`);
         delete allConnections[remote];
         if (connected && (connected.connection === newConnection)) {
             connected = null;
@@ -867,35 +854,63 @@ function showVia(parts) {
 }
 
 function showHidden() {
-    var keys = Object.keys(hiddenTypes);
-    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-        return `.${key}`;
-    }).join(' '));
-    keys = Object.keys(hiddenDestinations);
-    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-        return `>${key}`;
-    }).join(' '));
-    keys = Object.keys(hiddenSources);
-    if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
-        return `<${key}`;
-    }).join(' '));
+    if (!(showTime && showEOL && showControls)) {
+        var line = 'hide';
+        if (!showTime) line += ' time';
+        if (!showEOL) line += ' eol';
+        if (!showControls) line += ' control';
+        terminal.writeLine(line);
+    }
+    if (!showAll) {
+        var keys = Object.keys(hiddenTypes);
+        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+            return `.${key}`;
+        }).join(' '));
+        keys = Object.keys(hiddenDestinations);
+        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+            return `>${key}`;
+        }).join(' '));
+        keys = Object.keys(hiddenSources);
+        if (keys && keys.length > 0) terminal.writeLine('hide ' + keys.map(function(key) {
+            return `<${key}`;
+        }).join(' '));
+    }
 }
 
 function hide(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
-        switch(part.charAt(0)) {
-        case '>':
-            hiddenDestinations[validateCallSign('destination', part.substring(1))] = true;
+        switch(part.toLowerCase()) {
+        case 'all':
+            showAll = false;
             break;
-        case '<':
-            hiddenSources[validateCallSign('source', part.substring(1))] = true;
+        case 'controls':
+        case 'control':
+        case 'ctrl':
+            showControls = false;
             break;
-        case '.':
-            hiddenTypes[part.substring(1).toUpperCase()] = true;
+        case 'eol':
+        case 'end-of-line':
+            showEOL = false;
+            break;
+        case 'time':
+        case 'timestamp':
+            showTime = false;
             break;
         default:
-            terminal.writeLine(`Do you mean >${part} (destination) or <${part} (source)?`);
+            switch(part.charAt(0)) {
+            case '>':
+                hiddenDestinations[validateCallSign('destination', part.substring(1))] = true;
+                break;
+            case '<':
+                hiddenSources[validateCallSign('source', part.substring(1))] = true;
+                break;
+            case '.':
+                hiddenTypes[part.substring(1).toUpperCase()] = true;
+                break;
+            default:
+                terminal.writeLine(`Do you mean >${part} (destination) or <${part} (source)?`);
+            }
         }
     }
 }
@@ -903,19 +918,80 @@ function hide(parts) {
 function show(parts) {
     for (var p = 1; p < parts.length; ++p) {
         var part = parts[p];
-        switch(part.charAt(0)) {
-        case '>':
-            delete hiddenDestinations[validateCallSign('destination', part.substring(1))];
+        switch(part.toLowerCase()) {
+        case 'all':
+            showAll = true;
             break;
-        case '<':
-            delete hiddenSources[validateCallSign('source', part.substring(1))];
+        case 'controls':
+        case 'control':
+        case 'ctrl':
+            showControls = true;
             break;
-        case '.':
-            delete hiddenTypes[part.substring(1).toUpperCase()];
+        case 'eol':
+        case 'end-of-line':
+            showEOL = true;
+            break;
+        case 'time':
+        case 'timestamp':
+            showTime = true;
+            break;
+        case 'encoding':
+            terminal.writeLine(`encoding ${remoteEncoding}`);
+            break;
+        case 'esc':
+        case 'escape':
+            terminal.writeLine(`escape ${shared.controlify(escape)}`);
             break;
         default:
-            terminal.writeLine(`Do you mean >${part} (to) or <${part} (from)?`);
+            switch(part.charAt(0)) {
+            case '>':
+                delete hiddenDestinations[validateCallSign('destination', part.substring(1))];
+                break;
+            case '<':
+                delete hiddenSources[validateCallSign('source', part.substring(1))];
+                break;
+            case '.':
+                delete hiddenTypes[part.substring(1).toUpperCase()];
+                break;
+            default:
+                terminal.writeLine(`Do you mean >${part} (to) or <${part} (from)?`);
+            }
         }
+    }
+}
+
+function set(parts) {
+    if (!(parts[1] && parts[2])) {
+        throw('usage: set encoding|eol|escape <value>');
+    }
+    var value = parts[2];
+    switch(parts[1].toLowerCase()) {
+    case 'encoding':
+        value = shared.encodingName(value.toLowerCase());
+        shared.validateEncoding(value);
+        remoteEncoding = value;
+        break;
+    case 'eol':
+    case 'end-of-line':
+        remoteEOL = shared.fromASCII(value);
+        allRemoteEOLs = new RegExp(remoteEOL, 'g');
+        eachLine = new RegExp('.*' + remoteEOL, 'g');
+        break;
+    case 'esc':
+    case 'escape':
+        value = shared.fromASCII(value);
+        if (value.length > 1) {
+            throw AGWPE.newError(
+                `Escape must be a single character (not ${JSON.stringify(value)}).`,
+                'ERR_INVALID_ARG_VALUE');
+        }
+        escape = value;
+        terminal.setEscape(escape);
+        break;
+    default:
+        throw AGWPE.newError(
+            `${value}? Settable things are encoding, eol or escape.`,
+            'ERR_INVALID_ARG_VALUE');
     }
 }
 
@@ -942,16 +1018,9 @@ function bye() {
 try {
     tncPort = AGWPE.validatePort(args['tnc-port'] || args.tncport || 0);
     myCall = validateCallSign('local', args._[0]);
-    shared.validateEncoding(remoteEncoding);
-    validatePath(defaultPath);
-    remoteAddress = args._[1] ? validateCallSign('remote', args._[1]) : null;
-    if (ESC && ESC.length > 1) {
-        throw shared.newError(
-            `--escape must specify a single character (not ${JSON.stringify(ESC)}).`,
-            'ERR_INVALID_ARG_VALUE');
-    }
+    set(['set', 'eol', 'CR']);
     log.debug('%s', {
-        verbose: verbose,
+        args: JSON.stringify(args),
         myCall: myCall,
         tncPort: tncPort,
         remoteEOL: remoteEOL,
@@ -975,10 +1044,12 @@ try {
     setDataPrompt();
     setCommandMode(!remoteAddress);
     restartServer(tncPort);
-    const first = args.xecute || args.x;
-    if (first) first.split(';').forEach(interpret);
+    for (var a = 1; a < args._.length; ++a) {
+        interpret(args._[a]);
+    }
     terminal.on('line', interpret);
 } catch(err) {
-    log.error(err);
+    log.debug(err);
+    process.stderr.write(`${err}`);
     showUsage(1);
 }
