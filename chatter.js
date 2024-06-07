@@ -130,8 +130,10 @@ function parseVia(via) {
     return result;
 }
 
-var lastPacketBetween = {};
+var lastPurgeBetween = Date.now();
+const lastPacketBetween = {};
 const sec = 1000;
+const maxRepetitionTime = 15 * sec;
 
 function isRepetitive(packet) {
     try {
@@ -140,14 +142,22 @@ function isRepetitive(packet) {
               + '>' + validateCallSign('destination', packet.toAddress);
         const recent = lastPacketBetween[key];
         const current = packet.type
-              + ' ' + packet.NR + ' ' + packet.NS +
+              + ' ' + packet.NR + ' ' + packet.NS
               + ' ' + (packet.P || packet.F)
               + (packet.info ? ' ' + packet.info.toString('binary') : '');
         if (!recent || recent.packet != current) {
             lastPacketBetween[key] = {packet: current, when: now};
-        } else if (now - recent.when < 15 * sec) {
+        } else if (now - recent.when <= maxRepetitionTime) {
             recent.when = now;
             return true; // repetitive
+        }
+        if (now - lastPurgeBetween > 120 * sec) {
+            lastPurgeBetween = now;
+            Object.keys(lastPacketBetween).forEach(function(key) {
+                if (now - lastPacketBetween[key].when > 2 * maxRepetitionTime) {
+                    delete lastPacketBetween[key];
+                }
+            });
         }
     } catch(err) {
         log.warn(err);
