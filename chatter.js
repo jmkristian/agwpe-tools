@@ -1,6 +1,6 @@
 'use strict';
 
-const AGWPE = require('@jmkristian/node-agwpe');
+const AGWPE = require('../node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
 const Lines = require('./lines.js').Lines;
@@ -12,13 +12,19 @@ const Stream = require('stream');
 const validateCallSign = AGWPE.validateCallSign;
 
 const args = minimist(process.argv.slice(2), {
-    'boolean': ['debug', 'trace'],
+    'boolean': ['debug', 'trace', 'debugTNC', 'traceTNC'],
     'string': ['host', 'port', 'tnc-port', 'tncport', 'frame-length'],
 });
+const logStream = bunyanFormat({outputMode: 'short', color: false}, process.stderr);
 const log = Bunyan.createLogger({
     name: 'chatter',
     level: args.trace ? Bunyan.TRACE : args.debug ? Bunyan.DEBUG : Bunyan.INFO,
-    stream: bunyanFormat({outputMode: 'short', color: false}, process.stderr),
+    stream: logStream,
+});
+const agwLogger = Bunyan.createLogger({
+    name: 'AGWPE',
+    level: args.traceTNC ? Bunyan.TRACE : args.debugTNC ? Bunyan.DEBUG : Bunyan.INFO,
+    stream: logStream,
 });
 const allControls = new RegExp('[\x00-\x1F]|[\x7F-\u00A0]', 'g');
 const allOS_EOLs = new RegExp(OS.EOL, 'g');
@@ -407,7 +413,7 @@ function restartServer(newPort) {
         host: host,
         port: port,
         localPort: newPort,
-        logger: log,
+        logger: agwLogger,
     });
     newServer.on('error', function(err) {
         log.error('server error(%s)', err ? err : '');
@@ -729,15 +735,14 @@ function connect(parts) {
     const via = viaOption(remote, parts);
     const viaNote = via ? ` via ${via}` : '';
     const options = {
-        host: host,
-        port: port,
+        logger: agwLogger,
         localPort: tncPort,
         localAddress: myCall,
         remoteAddress: remote,
         via: via || undefined,
     };
     terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
-    const newConnection = AGWPE.createConnection(options, function() {
+    const newConnection = server.createConnection(options, function(data) {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
             const myConnection = {connection: newConnection, via: via || '', received: ''};
@@ -747,6 +752,15 @@ function connect(parts) {
         } catch(err) {
             log.error(err);
         }
+    });
+    ['error', 'timeout'].forEach(function(event) {
+        newConnection.on(event, function(err) {
+            terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
+            try {
+                newConnection.end(); // in case it hasn't already ended.
+            } catch(err) {
+            }
+        });
     });
     newConnection.on('end', function(info) {
         const message = info && escapify(shared.decode(info, remoteEncoding));
@@ -763,15 +777,6 @@ function connect(parts) {
             // This was the last connection to be closed.
             process.exit();
         }
-    });
-    ['error', 'timeout'].forEach(function(event) {
-        newConnection.on(event, function(err) {
-            terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
-            try {
-                newConnection.end(); // in case it hasn't already ended.
-            } catch(err) {
-            }
-        });
     });
     return false; // not connected yet. Stay tuned.
 } // connect
