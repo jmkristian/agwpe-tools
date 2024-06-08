@@ -245,8 +245,8 @@ function noteReturnPath(packet) {
                         terminal.writeLine(
                             `(Sending to ${target} ${viaBest} might be better than ${viaCurrent}.`);
                         terminal.writeLine(
-                            ` That path has been heard in ${best.counter} packets.)`);
-                    }
+                            ` The shorter path was heard in ${best.counter} packets.)`);
+                     }
                 }
             }
             // Next, consider the path to one of the repeaters:
@@ -842,8 +842,8 @@ function showVia(parts) {
             if (path == null) {
                 messages.push(`${prefix} to ${target} ${viaBest}.`);
             } else if (best.counter >= 4 && pathLength(best.path) <= pathLength(path)) {
-                messages.push(`It might be better to send to ${target} ${viaBest}.`);
-                messages.push(`That path has been heard in ${best.counter} packets.`);
+                messages.push(`(Sending to ${target} ${viaBest} might be better.`);
+                messages.push(` The shorter path was heard in ${best.counter} packets.)`);
             }
         }
     })
