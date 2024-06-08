@@ -18,7 +18,7 @@ class FileHelper extends Stream.Writable {
 
     _write(chunk, encoding, callback) {
         try {
-            var data = (typeof chunk) == 'string' ? chunk
+            const data = (typeof chunk) == 'string' ? chunk
                 : chunk == null ? '' // That's weird.
                 : chunk.toString();
             for (var d = 0; d < data.length; ++d) {
@@ -164,9 +164,11 @@ class StdHelper extends Stream.Writable {
                 }
                 this.buffer = '';
                 break;
-            case '\n':
             case '\r':
                 this.emitBuffer();
+                break;
+            case '\n': // '\r\n' is the end-of-line marker on some computers.
+                if (!sawCR) this.emitBuffer();
                 break;
             case this.lines.ESC:
                 this.clearBuffer();
@@ -186,6 +188,7 @@ class StdHelper extends Stream.Writable {
                 this.buffer += c;
                 output += c;
             }
+            this.sawCR = (c == '\r');
         }
         this.stdout.write(output, callback);
     }
