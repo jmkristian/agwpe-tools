@@ -1,6 +1,6 @@
 'use strict';
 
-const AGWPE = require('../node-agwpe');
+const AGWPE = require('@jmkristian/node-agwpe');
 const Bunyan = require('bunyan');
 const bunyanFormat = require('bunyan-format');
 const Lines = require('./lines.js').Lines;
