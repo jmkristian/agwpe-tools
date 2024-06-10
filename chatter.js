@@ -416,7 +416,9 @@ function restartServer(newPort) {
         logger: agwLogger,
     });
     newServer.on('error', function(err) {
-        log.error('server error(%s)', err ? err : '');
+        log.error(`Error from TNC ${host}:${port} port ${newPort}`);
+        log.error(err);
+        process.exit(2);
     });
     newServer.on('close', function closed(err) {
         if (server === newServer) {
