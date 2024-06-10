@@ -586,10 +586,7 @@ function execute(command) {
             if (parts.length < 2) {
                 terminal.writeLine('(What file do you want to execute?)');
             } else {
-                // This crude parser doesn't have a syntax for quoted strings.
-                // This is a pretty good approximation:
-                parts.splice(0, 1);
-                terminal.readFile(parts.join(' '));
+                terminal.readFile(command.replace(/^\s*[^\s]+\s+/, ''));
             }
             break;
         case 'b':
