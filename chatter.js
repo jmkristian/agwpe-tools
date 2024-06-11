@@ -40,6 +40,7 @@ var eachLine = undefined;
 var remoteEncoding = shared.encodingName('iso-8859-1');
 var showRepeats = false;
 var showTime = false;
+var myID = undefined;
 
 var allConnections = {};
 var bestPathTo = {};
@@ -644,6 +645,9 @@ function showCommands(preamble) {
         "          : Show unprintable characters (as string literals).",
         "show repeats",
         "          : Show packets that are heard repeatedly.",
+        "set id <string>",
+        "          : sent in a UI packet to ID, at the end of each connection.",
+        "          : This is a way to add your FCC call sign to a tactical call sign.",
         "set encoding <string>",
         "          : encoding of characters sent or received. Default: ISO-8859-1",
         "          : Other supported encodings are Windows-1252 and UTF-8.",
@@ -739,9 +743,10 @@ function connect(parts) {
         localAddress: myCall,
         remoteAddress: remote,
         via: via || undefined,
+        ID: myID || undefined,
     };
     terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
-    const newConnection = server.createConnection(options, function(data) {
+    const newConnection = AGWPE.createConnection(options, function(data) {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
             const myConnection = {connection: newConnection, via: via || '', received: ''};
@@ -949,6 +954,9 @@ function show(parts) {
         case 'escape':
             terminal.writeLine(`escape ${shared.controlify(escape)}`);
             break;
+        case 'id':
+            terminal.writeLine(`ID ${myID || '(none)'}`);
+            break;
         default:
             switch(part.charAt(0)) {
             case '>':
@@ -968,11 +976,12 @@ function show(parts) {
 }
 
 function set(parts) {
-    if (!(parts[1] && parts[2])) {
-        throw('usage: set encoding|eol|escape <value>');
-    }
+    const name = parts[1] && parts[1].toLowerCase();
     var value = parts[2];
-    switch(parts[1].toLowerCase()) {
+    if (!(name && (value || name == 'id'))) {
+        throw('usage: set encoding|eol|escape|ID <value>');
+    }
+    switch(name) {
     case 'encoding':
         value = shared.encodingName(value.toLowerCase());
         shared.validateEncoding(value);
@@ -994,6 +1003,9 @@ function set(parts) {
         }
         escape = value;
         terminal.setEscape(escape);
+        break;
+    case 'id':
+        myID = value || undefined;
         break;
     default:
         throw AGWPE.newError(
