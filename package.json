@@ -1,6 +1,6 @@
 {
   "name": "@jmkristian/agwpe-tools",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Communicate via AX.25, using an AGWPE-compatible TNC.",
   "main": "index.js",
   "engines": {
