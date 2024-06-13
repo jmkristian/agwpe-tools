@@ -168,7 +168,7 @@ class StdHelper extends Stream.Writable {
                 this.emitBuffer();
                 break;
             case '\n': // '\r\n' is the end-of-line marker on some computers.
-                if (!sawCR) this.emitBuffer();
+                if (!this.sawCR) this.emitBuffer();
                 break;
             case this.lines.ESC:
                 this.clearBuffer();
