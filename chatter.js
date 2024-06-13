@@ -733,6 +733,8 @@ function connect(parts) {
     const viaNote = via ? ` via ${via}` : '';
     const options = {
         logger: agwLogger,
+        host: host,
+        port: port,
         localPort: tncPort,
         localAddress: myCall,
         remoteAddress: remote,
