@@ -66,9 +66,6 @@ function pathLength(path) {
 function normalizePath(p) {
     return p && p.replace(/\s/g, '').replace(/,+/g, ',').toUpperCase();
 }
-function validatePath(p) {
-    if (p) p.split(/[\s,]+/).forEach(function(c) {validateCallSign('digipeater', c);});
-}
 var defaultPath = undefined;
 
 const terminal = new Lines(escape);
@@ -482,10 +479,7 @@ function viaOption(remoteAddress, parts) {
     if (parts.length < 3 || parts[2].toLowerCase() != 'via') {
         return getPathTo(remoteAddress);
     } else {
-        var path = normalizePath(parts[3]);
-        validatePath(path);
-        pathTo[remoteAddress] = path;
-        return path;
+        return (pathTo[remoteAddress] = AGWPE.validatePath(normalizePath(parts[3])));
     }
 }
 
@@ -813,9 +807,7 @@ function disconnect(arg) {
 } // disconnect
 
 function setVia(parts) {
-    const newPath = normalizePath(parts[1]);
-    validatePath(newPath);
-    defaultPath = newPath;
+    defaultPath = AGWPE.validatePath(normalizePath(parts[1]));
 }
 
 function showVia(parts) {
