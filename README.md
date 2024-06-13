@@ -8,7 +8,7 @@ using an AGWPE-compatible TNC (e.g.
 This package contains two programs `converse` and `chatter`,
 which you can use to interact with other stations via AX.25.
 They run in a command line window, for example
-"Command Prompt" on Windows or a shell window on Linux.
+"Command Prompt" on Windows or a terminal emulator window on Linux.
 
 `converse` communicates with one station, via an AX.25 connection.
 It's useful for interacting with a BBS.
@@ -16,44 +16,49 @@ It's useful for interacting with a BBS.
 and/or UI packets (also known as unproto packets).
 It's useful for participating in a multi-station chat session.
 
-### Converse on Windows
+### Converse
 
-To get started:
-1. Download the latest version of converse.exe
+First start your TNC (e.g. Direwolf or SoundModem).
+
+On Windows:
+1. Download the latest version of `converse.exe`
    [here](https://github.com/jmkristian/agwpe-tools/releases).
    It's in the Assets section of each release.
-2. Start your TNC (e.g. Direwolf or SoundModem).
-3. Open a PowerShell or Command Prompt (CMD) window.
-4. `cd` to the folder that contains converse.exe.
-5. Enter the command line:
+2. Open a PowerShell or Command Prompt (CMD) window.
+3. `cd` to the folder that contains converse.exe.
+4. `.\converse.exe <your call sign> <remote call sign> --verbose`
 
-`.\converse.exe <your call sign> <remote call sign> --verbose`
+On Linux:
+1. Download the latest version of `converse`
+   [here](https://github.com/jmkristian/agwpe-tools/releases).
+   It's in the Assets section of each release.
+2. Open a terminal emulator (shell) window.
+3. `cd` to the directory that contains converse.
+4. `chmod +x converse`
+5. `./converse <your call sign> <remote call sign> --verbose`
 
 You can watch a [demonstration video](https://youtu.be/lRvlnEeBrow/).
 
-To see a summary of the command line options, run `.\converse.exe` (with no arguments).
-
-Characters in your command line window are encoded in UTF-8.
-Characters sent to the remote station and received from the remote station
-are encoded as specified by the command line option --encoding.
+To see a summary of the command line options, run converse with no arguments.
 
 To communicate large amounts of text,
 you can copy-n-paste to or from your command line window.
 To copy all the text from a command line window,
 be sure to select the complete width of the screen buffer.
 
+Characters sent to the remote station and received from the remote station
+are encoded as specified by the command line option --encoding.
+
 You can customize converse.exe.
 For example, see [Polling a BBS](BBS_polling.md).
 
-### Chatter on Windows
+### Chatter
 
-You can download and run chatter.exe the same way.
-To see a summary of its command line options,
-run `.\chatter.exe` (with no arguments).
-To get started using it, run:
-
-`.\chatter.exe <your call sign>`
-
+You can download and run chatter the same way.
+To see a summary of its command line options, run it with no arguments.
+To get started using it, run
+`.\chatter.exe <your call sign>` on Windows or
+`./chatter <your call sign>` on Linux.
 Then enter `?` to see a summary of all the commands.
 
 To send data, enter an `unproto` or `connect` command;
@@ -66,7 +71,7 @@ By default, chatter hides packets that it hears repeatedly.
 Usually this means packets that are retransmitted by digipeaters.
 In general, it won't show a packet that's
 the same (except for digipeaters) as another packet it heard recently.
-To see the repetitive packets, enter the command `show all`.
+To see the repetitive packets, enter the command `show repeats`.
 
 If you don't specify the 'via' option to 'connect' or 'unproto' commands,
 chatter will try to use a short sequence of digipeaters.
@@ -83,11 +88,11 @@ Chatter will use the digipeaters you specify.
 It might suggest a shorter sequence if it hears one repeatedly,
 but it won't override your choice.
 
-### Linux
+### Using node
 
-These programs work similarly on Linux and other platforms that support
-[node.js](http://nodejs.org).
-To get started:
+In case the executable files don't work,
+you can use [node.js](http://nodejs.org) to run these commands.
+Here's how:
 
 1. Get node.js version 8.17 or later.
    Check your current version by running the command `node --version`.
@@ -113,5 +118,7 @@ It works on Windows 8 and Ubuntu 20, with
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions or on Mac.
 
-The Windows executable files were built by `build.sh`,
+The Windows executable files were built by `build.cmd`,
+running on node.js version 12.22.12.
+The Linux executable files were built by `build.sh`,
 running on node.js version 12.22.12.

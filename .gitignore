@@ -2,7 +2,9 @@
 \#*#
 .#*
 *.exe
+/chatter
+/converse
+/echo.js
 /node_modules
 /*.pfx
 /*.txt
-/echo.js
