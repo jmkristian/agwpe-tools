@@ -54,13 +54,14 @@ For example, see [Polling a BBS](BBS_polling.md).
 
 ### Chatter
 
-You can download and run chatter the same way.
+Download and run chatter the same way as converse.
+On Linux, run `chmod +x chatter` after you download it.
 To see a summary of its command line options, run it with no arguments.
-To get started using it, run
+
+To get started using chatter, run
 `.\chatter.exe <your call sign>` on Windows or
 `./chatter <your call sign>` on Linux.
 Then enter `?` to see a summary of all the commands.
-
 To send data, enter an `unproto` or `connect` command;
 then type the data you want to send.
 
