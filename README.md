@@ -114,12 +114,16 @@ Here's how:
 To see a summary of the command line options, run either program with no arguments.
 
 This software requires node.js version 8.17 or later.
-It works on Windows 8 and Ubuntu 20, with
+It works on Windows 8, Ubuntu 20 and MacOS Sonoma 14.4.1, with
 [Direwolf](https://github.com/wb2osz/direwolf) version 1.7
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
-It might work with other versions or on Mac.
+It might work with other versions.
 
 The Windows executable files were built by `build.cmd`,
-running on node.js version 12.22.12.
+running with node.js version 12.22.12.
 The Linux executable files were built by `build.sh`,
-running on node.js version 12.22.12.
+also running with node.js version 12.22.12.
+
+If you're willing to sign and notarize executable files for MacOS,
+please add a comment to
+[issue #5](https://github.com/jmkristian/agwpe-tools/issues/5).
