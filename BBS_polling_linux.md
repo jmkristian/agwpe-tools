@@ -50,8 +50,20 @@ for example:
 - `gnome-terminal --geometry=130x24+100+30 -- ./pollBBS w3xsc-1`
 - `konsole -p "TerminalColumns=130" -e "./pollBBS w3xsc-1"`
 
+To make Konsole respond to "TerminalColumns=130",
+open a Konsole window, click 'Settings > Configure Konsole' and
+un-check 'Remember window size'.
+
 For the GNOME desktop, you can use
 [alacarte](https://www.makeuseof.com/tag/edit-system-menu-items-alacarte-linux/)
 to add a launcher to the Applications menu.
+
+For the KDE Plasma desktop, you can
+[add an application menu entry](https://docs.kde.org/stable5/en/kmenuedit/kmenuedit/quickstart.html):
+
+![Application Properties](launcher-KDE.png)
+
+... save it, close the menu editor, find the new entry in the Applications menu,
+right-click it and click 'Add to Desktop'.
 
 73, John Kristian W6JMK
