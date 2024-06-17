@@ -37,9 +37,13 @@ On Linux:
 4. `chmod +x converse`
 5. `./converse <your call sign> <remote call sign> --verbose`
 
-You can watch a [demonstration video](https://youtu.be/lRvlnEeBrow/).
+You can watch a video demonstrating this
+on [Windows](https://youtu.be/lRvlnEeBrow/)
+or [Linux](https://youtu.be/3QpdWmihQBI).
 
 To see a summary of the command line options, run converse with no arguments.
+To see a summary of commands you can give to converse,
+pause a conversation and enter ? (a question mark).
 
 To communicate large amounts of text,
 you can copy-n-paste to or from your command line window.
@@ -50,7 +54,9 @@ Characters sent to the remote station and received from the remote station
 are encoded as specified by the command line option --encoding.
 
 You can customize converse.exe.
-For example, see [Polling a BBS](BBS_polling.md).
+For example, see how to poll a BBS
+on [Windows](BBS_polling.md)
+or [Linux](BBS_polling_linux.md).
 
 ### Chatter
 
@@ -124,6 +130,6 @@ running with node.js version 12.22.12.
 The Linux executable files were built by `build.sh`,
 also running with node.js version 12.22.12.
 
-If you're willing to sign and notarize executable files for MacOS,
+If you're willing to help make executable files for MacOS,
 please add a comment to
 [issue #5](https://github.com/jmkristian/agwpe-tools/issues/5).
