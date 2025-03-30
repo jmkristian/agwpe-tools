@@ -428,7 +428,8 @@ function restartServer(newPort) {
     });
     newServer.on('connection', function(connection) {
         const from = connection.remoteAddress.toUpperCase();
-        allConnections[from] = {connection: connection, received: ''};
+        watchConnection(connection, from);
+        onConnected(connection, from);
         terminal.writeLine(
             `(Received a connection.`
                 + ` The command "c ${from}" will start sending data there.)`);
@@ -745,14 +746,17 @@ function connect(parts) {
     const newConnection = AGWPE.createConnection(options, function(data) {
         try {
             terminal.writeLine(`(Connected to ${remote}${viaNote}.)`);
-            const myConnection = {connection: newConnection, via: via || '', received: ''};
-            connected = allConnections[remote] = myConnection;
+            connected = onConnected(newConnection, remote, via);
             startSendingTo(remote, 'I');
-            newConnection.pipe(new Receiver(myConnection));
         } catch(err) {
             log.error(err);
         }
     });
+    watchConnection(newConnection, remote);
+    return false; // not connected yet. Stay tuned.
+} // connect
+
+function watchConnection(newConnection, remote) {
     ['error', 'timeout'].forEach(function(event) {
         newConnection.on(event, function(err) {
             terminal.writeLine(`(${event} ${err || ''} from ${remote})`);
@@ -778,8 +782,14 @@ function connect(parts) {
             process.exit();
         }
     });
-    return false; // not connected yet. Stay tuned.
-} // connect
+}
+
+function onConnected(newConnection, remote, via) {
+    const myConnection = {connection: newConnection, via: via || '', received: ''};
+    allConnections[remote] = myConnection;
+    newConnection.pipe(new Receiver(myConnection));
+    return myConnection;
+}
 
 function showAllConnections() {
     Object.keys(allConnections).forEach(function(remoteAddress) {
