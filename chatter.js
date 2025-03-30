@@ -332,7 +332,9 @@ function logPacketReceived(packet, callback) {
         marker += ' via ' + via.join(',');
     }
     marker += ` ${packet.type} `;
-    const info = shared.decode(packet.info, remoteEncoding) || '';
+    const info = packet.type == 'XID'
+          ? shared.hexBuffer(packet.info)
+          : shared.decode(packet.info, remoteEncoding) || '';
     var lines = [];
     var last = null;
     info.split(remoteEOL).forEach(function(line) {
