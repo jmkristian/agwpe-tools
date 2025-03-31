@@ -381,9 +381,11 @@ function toRemoteLine(line) {
     return shared.encode(line + remoteEOL, remoteEncoding);
 }
 
-function logSent(packetType, data, remoteAddress, via) {
-    logLines(`> ${remoteAddress}` + ((showVia && via) ? ` via ${via}` : '') + ` ${packetType} `,
-             [shared.decode(data, remoteEncoding)]);
+function logSent(packetType, line, remoteAddress, via) {
+    logLines(`> ${remoteAddress}`
+             + ((showVia && via) ? ` via ${via}` : '')
+             + ` ${packetType} `,
+             [line]);
 }
 
 function interpret(line) {
@@ -392,23 +394,22 @@ function interpret(line) {
             execute(line);
         } else if (connected) {
             log.debug(`send I ${line}`);
-            var lineSent = toRemoteLine(line);
-            connected.connection.write(lineSent, function sent() {
-                logSent('I', lineSent, connected.connection.remoteAddress);
+            connected.connection.write(toRemoteLine(line), function sent() {
+                logSent('I', line, connected.connection.remoteAddress);
             });
         } else if (remoteAddress) {
             log.debug(`send UI ${line}`);
             const via = getPathTo(remoteAddress);
-            var lineSent = toRemoteLine(line);
-            rawSocket.write({
+            const packet = {
                 port: tncPort,
                 type: 'UI',
                 toAddress: remoteAddress,
                 fromAddress: myCall,
                 via: via || undefined,
-                info: lineSent,
-            }, function sent() {
-                logSent('UI', lineSent, remoteAddress, via);
+                info: toRemoteLine(line),
+            };
+            rawSocket.write(packet, function sent() {
+                logSent('UI', line, remoteAddress, via);
             });
         } else {
             terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
