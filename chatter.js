@@ -273,13 +273,15 @@ function pad2(n) {
 
 function logLine(line, callback) {
     try {
-        const now = new Date();
-        const prefix = !showTime ? ''
-              : pad2(now.getHours())
-              + ':' + pad2(now.getMinutes())
-              + ':' + pad2(now.getSeconds())
-              + ' ';
-        terminal.writeLine(prefix + line, callback);
+        var s = line;
+        if (showTime) {
+            const now = new Date();
+            s = pad2(now.getHours())
+                + ':' + pad2(now.getMinutes())
+                + ':' + pad2(now.getSeconds())
+                + ' ' + s;
+        }
+        terminal.writeLine(s, callback);
     } catch(err) {
         if (callback) callback(err);
     }
