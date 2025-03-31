@@ -128,6 +128,16 @@ var lastPurgeBetween = Date.now();
 const lastPacketBetween = {};
 const sec = 1000;
 const maxRepetitionTime = 15 * sec;
+const fakeNR = '?';
+var fakeNS = 0;
+
+function packetDigest(packet) {
+    return packet.type
+        + ' ' + packet.NR
+        + ' ' + packet.NS
+        + ' ' + (packet.P || packet.F)
+        + (packet.info ? ' ' + packet.info.toString('binary') : '');
+}
 
 function hideRepeat(packet) {
     try {
@@ -135,17 +145,21 @@ function hideRepeat(packet) {
         const key = validateCallSign('source', packet.fromAddress)
               + '>' + validateCallSign('destination', packet.toAddress);
         const recent = lastPacketBetween[key];
-        const current = packet.type
-              + ' ' + packet.NR + ' ' + packet.NS
-              + ' ' + (packet.P || packet.F)
-              + (packet.info ? ' ' + packet.info.toString('binary') : '');
-        if (!recent || recent.packet != current) {
-            lastPacketBetween[key] = {packet: current, when: now};
-        } else if (now - recent.when <= maxRepetitionTime) { // repetitive
-            recent.when = now;
+        const current = packetDigest(packet);
+        const currentSent = recent && packetDigest({
+            type: packet.type,
+            NR: fakeNR,
+            NS: fakeNS,
+            info: packet.info,
+        });
+        lastPacketBetween[key] = {packet: current, when: now};
+        if (recent
+            && now - recent.when <= maxRepetitionTime
+            && (recent.packet == current || recent.packet == currentSent)) {
             return !showRepeats;
         }
         if (now - lastPurgeBetween > 120 * sec) {
+            // delete obsolete items:
             lastPurgeBetween = now;
             Object.keys(lastPacketBetween).forEach(function(key) {
                 if (now - lastPacketBetween[key].when > 2 * maxRepetitionTime) {
@@ -394,7 +408,16 @@ function interpret(line) {
             execute(line);
         } else if (connected) {
             log.debug(`send I ${line}`);
-            connected.connection.write(toRemoteLine(line), function sent() {
+            const packet = {
+                type: 'I',
+                toAddress: remoteAddress,
+                fromAddress: myCall,
+                NR: fakeNR,
+                NS: ++fakeNS,
+                info: toRemoteLine(line),
+            };
+            hideRepeat(packet);
+            connected.connection.write(packet.info, function sent() {
                 logSent('I', line, connected.connection.remoteAddress);
             });
         } else if (remoteAddress) {
@@ -408,6 +431,7 @@ function interpret(line) {
                 via: via || undefined,
                 info: toRemoteLine(line),
             };
+            hideRepeat(packet);
             rawSocket.write(packet, function sent() {
                 logSent('UI', line, remoteAddress, via);
             });
