@@ -15,6 +15,7 @@ const args = minimist(process.argv.slice(2), {
     'boolean': ['debug', 'trace', 'debugTNC', 'traceTNC'],
     'string': ['host', 'port', 'tnc-port', 'tncport', 'frame-length'],
 });
+var argsCommandIndex = 1; // args._.slice(1) are commands to be executed
 const logStream = bunyanFormat({outputMode: 'short', color: false}, process.stderr);
 const log = Bunyan.createLogger({
     name: 'chatter',
@@ -40,6 +41,7 @@ var eachLine = undefined;
 var remoteEncoding = shared.encodingName('iso-8859-1');
 var showRepeats = false;
 var showTime = false;
+var showVia = true;
 var myID = undefined;
 
 var allConnections = {};
@@ -69,6 +71,15 @@ function normalizePath(p) {
 var defaultPath = undefined;
 
 const terminal = new Lines(escape);
+terminal.on('debug', function(message) {
+    log.debug('terminal ' + message);
+});
+terminal.on('error', function(err) {
+    log.error(err);
+    setTimeout(function() {
+        terminal.writeLine(); // prompt
+    }, 2);
+});
 var commandMode = true;
 const commandPrompt = 'cmd: ';
 var dataPrompt = '';
@@ -176,7 +187,7 @@ function showHeard() {
             + ':' + pad2(d.getMinutes())
             + ':' + pad2(d.getSeconds())
             + ' ' + padString(from.fromAddress, 9)
-            + (from.via ? ' via ' + from.via : '');
+            + ((showVia && from.via) ? ' via ' + from.via : '');
     }).forEach(function(line) {
         terminal.writeLine(line);
     });
@@ -297,9 +308,9 @@ function showUsage(exitCode) {
         '', // blank line
         `Usage: ${myName} [options] <local call sign> [command command ...]`,
         `Supported options are:`,
-        `--host <address>    : TCP host of the TNC. Default: 127.0.0.1`,
-        `--port N            : TCP port of the TNC. Default: 8000`,
-        `--tnc-port N        : TNC port (sound card number), in the range 0-255. Default: 0`,
+        `--host <address> : TCP host of the TNC. Default: 127.0.0.1`,
+        `--port N         : TCP port of the TNC. Default: 8000`,
+        `--tnc-port N     : TNC port (sound card number), in the range 0-255. Default: 0`,
         '',
     ].join(OS.EOL));
     if (exitCode != null) process.exit(exitCode);
@@ -315,7 +326,7 @@ function logPacketReceived(packet, callback) {
     } else {
         marker += `${packet.fromAddress} > ${packet.toAddress}`;
     }
-    if (packet.via && packet.via.length) {
+    if (showVia && packet.via && packet.via.length) {
         var via = [];
         var lastSender = 0;
         for (var v = packet.via.length; --v >= 0; ) {
@@ -368,9 +379,9 @@ function toRemoteLine(line) {
     return shared.encode(line + remoteEOL, remoteEncoding);
 }
 
-function logLineSent(packetType, line, remoteAddress, via) {
-    logLines(`> ${remoteAddress}` + (via ? ` via ${via}` : '') + ` ${packetType} `,
-             [shared.decode(line, remoteEncoding)]);
+function logSent(packetType, data, remoteAddress, via) {
+    logLines(`> ${remoteAddress}` + ((showVia && via) ? ` via ${via}` : '') + ` ${packetType} `,
+             [shared.decode(data, remoteEncoding)]);
 }
 
 function interpret(line) {
@@ -378,11 +389,13 @@ function interpret(line) {
         if (commandMode) {
             execute(line);
         } else if (connected) {
+            log.debug(`send I ${line}`);
             var lineSent = toRemoteLine(line);
             connected.connection.write(lineSent, function sent() {
-                logLineSent('I', lineSent, connected.connection.remoteAddress);
+                logSent('I', lineSent, connected.connection.remoteAddress);
             });
         } else if (remoteAddress) {
+            log.debug(`send UI ${line}`);
             const via = getPathTo(remoteAddress);
             var lineSent = toRemoteLine(line);
             rawSocket.write({
@@ -393,7 +406,7 @@ function interpret(line) {
                 via: via || undefined,
                 info: lineSent,
             }, function sent() {
-                logLineSent('UI', lineSent, remoteAddress, via);
+                logSent('UI', lineSent, remoteAddress, via);
             });
         } else {
             terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
@@ -466,6 +479,9 @@ function restartServer(newPort) {
                     rawSocket = newSocket;
                 }
             });
+           while (argsCommandIndex < args._.length) {
+                interpret(args._[argsCommandIndex++]);
+            }
         }
     });
 } // restartServer
@@ -554,7 +570,7 @@ function execute(command) {
             setVia(parts);
             break;
         case 'via?':
-            showVia(parts);
+            showDigipeaters(parts);
             break;
         case 'heard':
             showHeard();
@@ -584,7 +600,9 @@ function execute(command) {
             if (parts.length < 2) {
                 terminal.writeLine('(What file do you want to execute?)');
             } else {
-                terminal.readFile(command.replace(/^\s*[^\s]+\s+/, ''));
+                const fileName = command.replace(/^\s*[^\s]+\s+/, '');
+                log.debug(`terminal.readFile(${fileName})`);
+                terminal.readFile(fileName);
             }
             break;
         case 'b':
@@ -633,6 +651,7 @@ function showCommands(preamble) {
         "          : Set the maximum number of source addresses to remember.",
         "hide [<fromCall >toCall ...]",
         "          : Stop showing packets addressed from: fromCall or to: toCall.",
+        "hide via  : Stop showing digipeaters.",
         "hide?     : Show which packets are currently hidden.",
         "show [<fromCall >toCall ...]",
         "          : Resume showing things that were previously hidden.", 
@@ -733,7 +752,6 @@ function connect(parts) {
         return true;
     }
     const via = viaOption(remote, parts);
-    const viaNote = via ? ` via ${via}` : '';
     const options = {
         logger: agwLogger,
         host: host,
@@ -744,6 +762,7 @@ function connect(parts) {
         via: via || undefined,
         ID: myID || undefined,
     };
+    const viaNote = (showVia && via) ? ` via ${via}` : '';
     terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
     const newConnection = AGWPE.createConnection(options, function(data) {
         try {
@@ -796,7 +815,7 @@ function onConnected(newConnection, remote, via) {
 function showAllConnections() {
     Object.keys(allConnections).forEach(function(remoteAddress) {
         const via = allConnections[remoteAddress].via;
-        const viaNote = via ? ` via ${via}` : '';
+        const viaNote = (showVia && via) ? ` via ${via}` : '';
         terminal.writeLine(`connect ${remoteAddress}${viaNote}`);
     });
 } // showAllConnections
@@ -824,7 +843,7 @@ function setVia(parts) {
     defaultPath = AGWPE.validatePath(normalizePath(parts[1]));
 }
 
-function showVia(parts) {
+function showDigipeaters(parts) {
     const remoteAddress = parts[1] && validateCallSign('remote', parts[1]);
     var targets = undefined;
     if (remoteAddress) {
@@ -875,6 +894,7 @@ function showHidden() {
         if (!showEOL) line += ' eol';
         if (!showControls) line += ' control';
         if (!showRepeats) line += ' repeats';
+        if (!showVia) line += ' via';
         terminal.writeLine(line);
     }
     var keys = Object.keys(hiddenTypes);
@@ -912,6 +932,9 @@ function hide(parts) {
         case 'time':
         case 'timestamp':
             showTime = false;
+            break;
+        case 'via':
+            showVia = false;
             break;
         default:
             switch(part.charAt(0)) {
@@ -952,6 +975,9 @@ function show(parts) {
         case 'time':
         case 'timestamp':
             showTime = true;
+            break;
+        case 'via':
+            showVia = true;
             break;
         case 'encoding':
             terminal.writeLine(`encoding ${remoteEncoding}`);
@@ -1050,16 +1076,15 @@ try {
         tncPort: tncPort,
         remoteEOL: remoteEOL,
     });
-    terminal.on('error', function(err) {
-        terminal.writeLine(err);
-    });
     terminal.on('SIGTERM', process.exit); // exit abruptly
     ['close', 'SIGINT'].forEach(function(event) { // exit gracefully
         terminal.on(event, function(info) {
+            log.debug(`terminal ${event} ${info || ''}`);
             bye();
         });
     });
     terminal.on('escape', function() {
+        log.debug('terminal escape');
         if (commandMode && !(connected || remoteAddress)) {
             terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
         } else {
@@ -1069,9 +1094,6 @@ try {
     setDataPrompt();
     setCommandMode(!remoteAddress);
     restartServer(tncPort);
-    for (var a = 1; a < args._.length; ++a) {
-        interpret(args._[a]);
-    }
     terminal.on('line', interpret);
 } catch(err) {
     log.debug(err);

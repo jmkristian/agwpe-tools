@@ -5,86 +5,79 @@ const fs = require('fs');
 const OS = require('os');
 const shared = require('./shared.js');
 const Stream = require('stream');
+const END = {};
 
 class FileHelper extends Stream.Writable {
 
-    constructor(lines) {
+    constructor(buffer) {
         super({
             decodeStrings: false, // Don't convert strings to bytes
         });
-        this.lines = lines;
-        this.buffer = '';
+        this.buffer = buffer;
     }
 
     _write(chunk, encoding, callback) {
-        try {
-            const data = (typeof chunk) == 'string' ? chunk
-                : chunk == null ? '' // That's weird.
-                : chunk.toString();
-            for (var d = 0; d < data.length; ++d) {
-                var c = data.charAt(d);
-                switch(c) {
-                case shared.BS:
-                case shared.DEL:
-                    if (this.buffer.length > 0) {
-                        this.buffer = this.buffer.substring(0, this.buffer.length - 1);
-                    }
-                    break;
-                case '\x15': // Ctrl+U erase buffer
-                    this.buffer = '';
-                    break;
-                case this.lines.ESC:
-                    this.buffer = '';
-                    this.lines.emit('escape');
-                    break;
-                default:
-                    this.buffer += c;
-                }
-                if (this.buffer.endsWith(OS.EOL)) {
-                    this.buffer = this.buffer.substring(0, this.buffer.length - OS.EOL.length);
-                    this.lines.emit('line', this.buffer);
-                    this.buffer = '';
-                }
-            }
-        } catch(err) {
-            this.lines.emit('error', err);
-        }
-        if (callback) callback();
+        this.buffer.push(chunk && chunk.toString(shared.localEncoding));
+        this.buffer.push(callback);
+        this.emit('input');
+    }
+
+    _final(callback) {
+        this.buffer.push(callback);
+        this.buffer.push(END);
+        this.emit('input');
     }
 } // FileHelper
 
-class StdHelper extends Stream.Writable {
+class StdHelper extends FileHelper {
 
-    constructor(lines, stdout) {
-        super({
-            decodeStrings: false, // Don't convert strings to bytes
-            encoding: 'binary',
-            highWaterMark: 128,
-        });
-        this.lines = lines;
-        this.stdout = stdout;
-        this.buffer = '';
-        this.prompt = '';
-        this.INT = shared.INT;
-        this.TERM = shared.TERM;
-        const specials = [this.INT, this.TERM].filter(function(c) {return c;});
-        if (specials.length > 0) {
-            this.pattern = new RegExp(specials.join('|'), 'g');
-        }
+    constructor(buffer) {
+        super(buffer);
         const that = this;
         this.on('pipe', function(from) {
-            that.isRaw = false;
             try {
                 if (from.isTTY && from.setRawMode) {
                     from.setRawMode(true);
                     that.isRaw = true;
                 }
             } catch(err) {
-                that.lines.emit('error', err);
+                that.emit('error', err);
             }
         });
     }
+} // StdHelper
 
+class Lines extends EventEmitter {
+
+    constructor(ESC) {
+        super();
+        this.ESC = ESC;
+        this.stdout = process.stdout;
+        this.buffer = '';
+        this.prompt = '';
+        const input = {data: []};
+        this.inputs = [input];
+        this.std = new StdHelper(input.data);
+        this.watchHelper(this.std);
+        process.stdin.pipe(this.std);
+    }
+
+    watchHelper(helper) {
+        const that = this;
+        helper.on('error', function(err) {
+            that.emit('error', err);
+        });
+        helper.on('input', function() {
+            that.onInput();
+        });
+    }
+
+    /** Emit an 'escape' event when the user types this character. */
+    setEscape(escape) {
+        this.ESC = escape;
+    }
+
+    /** Use this to prompt the user for input. */
     setPrompt(prompt, callback) {
         if (this.prompt == prompt) {
             if (callback) callback();
@@ -105,17 +98,6 @@ class StdHelper extends Stream.Writable {
         }
     }
 
-    clearBuffer() {
-        this.stdout.write(this.buffer.replace(/./g, '\b \b'));
-        this.buffer = '';
-    }
-
-    emitBuffer() {
-        const line = this.buffer;
-        this.clearBuffer();
-        this.lines.emit('line', line);
-    }
-
     /** Show a line to the user. */
     writeLine(chunk, callback) {
         const line = chunk ? chunk.toString() : '';
@@ -134,101 +116,110 @@ class StdHelper extends Stream.Writable {
         this.stdout.write(output, callback);
     }
 
-    /** Handle input coming from the user. */
-    _write(chunk, encoding, callback) {
-        var data = (typeof chunk) == 'string' ? chunk
-            : chunk == null ? '' // That's weird.
-            : chunk.toString();
-        if (this.pattern) {
-            const that = this;
-            data = data.replace(this.pattern, function(found) {
-                if (found == that.INT) that.lines.emit('SIGINT');
-                else if (found == that.TERM) that.lines.emit('SIGTERM');
-                return '';
-            });
-        }
-        var output = '';
-        for (var d = 0; d < data.length; ++d) {
-            var c = data.charAt(d);
-            switch(c) {
-            case shared.BS:
-            case shared.DEL:
-                if (this.buffer.length > 0) {
-                    output += '\b \b';
-                    this.buffer = this.buffer.substring(0, this.buffer.length - 1);
-                }
-                break;
-            case '\x15': // Ctrl+U erase buffer
-                for (var b = this.buffer.length; b > 0; --b) {
-                    output += '\b \b';
-                }
-                this.buffer = '';
-                break;
-            case '\r':
-                this.emitBuffer();
-                break;
-            case '\n': // '\r\n' is the end-of-line marker on some computers.
-                if (!this.sawCR) this.emitBuffer();
-                break;
-            case this.lines.ESC:
-                this.clearBuffer();
-                this.lines.emit('escape');
-                break;
-            case shared.EOT:
-                if (this.buffer) {
-                    this.emitBuffer();
-                } else {
-                    this.lines.emit('close');
-                }
-                break;
-            case shared.INT:
-                this.lines.emit('SIGINT');
-                break;
-            default:
-                this.buffer += c;
-                output += c;
+    clearBuffer() {
+        this.stdout.write(this.buffer.replace(/./g, '\b \b'));
+        this.buffer = '';
+    }
+
+    emitBuffer() {
+        const line = this.buffer;
+        this.clearBuffer();
+        this.emit('debug', `${this.inputs.length} emit line ${JSON.stringify(line)}`);
+        this.emit('line', line);
+    }
+
+    onInput() {
+        // One of this.inputs just got longer, but not necessarily the active one.
+        var inputCount;
+        while ((inputCount = this.inputs.length) > 0) {
+            const input = this.inputs[inputCount - 1];
+            if (input.data.length <= 0) {
+                break; // wait for another input event
             }
-            this.sawCR = (c == '\r');
+            const item = input.data.shift();
+            var event = null;
+            var output = '';
+            if ((typeof item) == 'function') { // a callback
+                this.emit('debug', `${this.inputs.length} onInput callback`);
+                item();
+            } else if (item === END) {
+                this.emit('debug', `${this.inputs.length} onInput END`);
+                this.inputs.pop();
+            } else if (item) { // input character string
+                this.emit('debug', `${this.inputs.length} ${input.sawCR} onInput ${JSON.stringify(item)})`);
+                var i;
+                for (i = 0; !event && i < item.length; ++i) {
+                    var c = item.charAt(i);
+                    switch(c) {
+                    case shared.BS:
+                    case shared.DEL:
+                        if (this.buffer.length > 0) {
+                            output += '\b \b';
+                            this.buffer = this.buffer.substring(0, this.buffer.length - 1);
+                        }
+                        break;
+                    case '\x15': // Ctrl+U erase buffer
+                        for (var b = this.buffer.length; b > 0; --b) {
+                            output += '\b \b';
+                        }
+                        this.buffer = '';
+                        break;
+                    case '\r':
+                        event = 'line';
+                        break;
+                    case '\n': // '\r\n' is the end-of-line marker on some computers.
+                        if (!input.sawCR) event = 'line';
+                        break;
+                    case this.ESC:
+                        event = 'escape';
+                        this.clearBuffer();
+                        break;
+                    case shared.EOT:
+                        event = this.buffer ? 'line' : 'close';
+                        break;
+                    case shared.INT:
+                        event = 'SIGINT';
+                        break;
+                    default:
+                        this.buffer += c;
+                        if (inputCount > 1 || this.std.isRaw) {
+                            output += c;
+                        }
+                    }
+                    input.sawCR = (c == '\r');
+                }
+                // An event handler might modify this.events, for example by calling this.readFile.
+                // So, don't parse any more input characters yet:
+                if (i < item.length) {
+                    input.data.unshift(item.substring(i));
+                }
+            }
+            if (output) this.stdout.write(output);
+            if (event == 'line') {
+                this.emitBuffer();
+            } else if (event) {
+                this.emit(event);
+            }
+            // ... and re-examine this.inputs, in the next iteration.
         }
-        this.stdout.write(output, callback);
-    }
-
-} // StdHelper
-
-class Lines extends EventEmitter {
-
-    constructor(ESC) {
-        super();
-        this.ESC = ESC;
-        this.std = new StdHelper(this, process.stdout);
-        process.stdin.pipe(this.std);
-    }
-
-    /** Emit an 'escape' event when the user types this character. */
-    setEscape(escape) {
-        this.ESC = escape;
-    }
-
-    /** Use this to prompt the user for input. */
-    setPrompt(prompt, callback) {
-        this.std.setPrompt(prompt, callback);
-    }
-
-    /** Show a line to the user. */
-    writeLine(line, callback) {
-        this.std.writeLine(line, callback);
     }
 
     /** Emit all the lines contained in the given file. */
     readFile(fileName) {
         try {
-            const that = this;
+            const input = {data: []};
+            this.inputs.push(input);
+            const helper = new FileHelper(input.data);
+            this.watchHelper(helper);
             const reader = fs.createReadStream(fileName);
+            const that = this;
             reader.on('error', function(err) {
-                that.emit('error', err);
+                helper.end(function() {
+                    that.emit('error', err);
+                });
             });
             reader.on('open', function(fileDescriptor) {
-                reader.pipe(new FileHelper(that));
+                reader.pipe(helper);
             });
         } catch(err) {
             this.emit('error', err);
