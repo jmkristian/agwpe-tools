@@ -47,8 +47,9 @@ class StdHelper extends FileHelper {
 
 class Lines extends EventEmitter {
 
-    constructor(ESC) {
+    constructor(onLine, ESC) {
         super();
+        this.onLine = onLine;
         this.ESC = ESC;
         this.stdout = process.stdout;
         this.buffer = '';
@@ -66,7 +67,7 @@ class Lines extends EventEmitter {
             that.emit('error', err);
         });
         helper.on('input', function() {
-            that.onInput();
+            that.continueInput();
         });
         helper.on('finish', function() {
             helper.buffer.push(function() {
@@ -128,17 +129,27 @@ class Lines extends EventEmitter {
     emitBuffer() {
         const line = this.buffer;
         this.clearBuffer();
-        this.emit('debug', `${this.inputs.length} emit line ${JSON.stringify(line)}`);
-        this.emit('line', line);
+        this.inputPaused = true;
+        const that = this;
+        this.onLine(line, function callback() {
+            delete that.inputPaused;
+            // onLine may callback synchronously or asynchronously.
+            // If it's synchronous, continueInput will continue immediately.
+            // In case it's asynchronous:
+            setTimeout(function() {
+                that.continueInput(); // not recursive
+            }, 1);
+        });
     }
 
-    onInput() {
-        // One of this.inputs just got longer, but not necessarily the active one.
+    /** Process this.inputs if !this.inputPaused && there's any input data available. */
+    continueInput() {
         var inputCount;
-        while ((inputCount = this.inputs.length) > 0) {
+        while (!this.inputPaused && (inputCount = this.inputs.length) > 0) {
             const input = this.inputs[inputCount - 1];
             if (input.data.length <= 0) {
-                break; // wait for another input event
+                // For example, data were added to a different member of this.inputs.
+                break; // wait for another call to continueInput
             }
             const item = input.data.shift();
             var event = null;
@@ -147,7 +158,7 @@ class Lines extends EventEmitter {
                 item();
                 // The item may modify this.inputs. So re-examine them.
             } else if (item) { // input character string
-                this.emit('debug', `${this.inputs.length} ${input.sawCR} onInput ${JSON.stringify(item)})`);
+                this.emit('debug', `${this.inputs.length} ${input.sawCR} continueInput ${JSON.stringify(item)})`);
                 var i;
                 for (i = 0; !event && i < item.length; ++i) {
                     var c = item.charAt(i);
@@ -212,8 +223,8 @@ class Lines extends EventEmitter {
             this.inputs.push(input);
             const helper = new FileHelper(input.data);
             this.watchHelper(helper);
-            const reader = fs.createReadStream(fileName);
             const that = this;
+            const reader = fs.createReadStream(fileName);
             reader.on('error', function(err) {
                 helper.end(function() {
                     that.emit('error', err);

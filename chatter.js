@@ -70,7 +70,9 @@ function normalizePath(p) {
 }
 var defaultPath = undefined;
 
-const terminal = new Lines(escape);
+const terminal = new Lines(function(line, callback){
+    interpret(line, callback);
+}, escape);
 terminal.on('debug', function(message) {
     log.debug('terminal ' + message);
 });
@@ -395,17 +397,28 @@ function toRemoteLine(line) {
     return shared.encode(line + remoteEOL, remoteEncoding);
 }
 
+function noteVia(via) {
+    if (!showVia) return '';
+    if (!via) return '';
+    if (Array.isArray(via)) {
+        if (via.length <= 0) return '';
+        return ` via ${via.join(',')}`;
+    }
+    return ` via ${via}`;
+}
+
 function logSent(packetType, line, remoteAddress, via) {
     logLines(`> ${remoteAddress}`
-             + ((showVia && via) ? ` via ${via}` : '')
+             + noteVia(via)
              + ` ${packetType} `,
              [line]);
 }
 
-function interpret(line) {
+function interpret(line, callback) {
     try {
         if (commandMode) {
             execute(line);
+            if (callback) callback();
         } else if (connected) {
             log.debug(`send I ${line}`);
             const packet = {
@@ -419,6 +432,7 @@ function interpret(line) {
             hideRepeat(packet);
             connected.connection.write(packet.info, function sent() {
                 logSent('I', line, connected.connection.remoteAddress);
+                if (callback) callback();
             });
         } else if (remoteAddress) {
             log.debug(`send UI ${line}`);
@@ -434,13 +448,16 @@ function interpret(line) {
             hideRepeat(packet);
             rawSocket.write(packet, function sent() {
                 logSent('UI', line, remoteAddress, via);
+                if (callback) callback();
             });
         } else {
-            terminal.writeLine('(Where to? Enter "u callsign" to set a destination address.)');
+            terminal.writeLine('(Where to? Enter "unproto callsign" to set a destination address.)');
             setCommandMode(true);
+            if (callback) callback();
         }
     } catch(err) {
         log.error(err);
+        if (callback) callback(err);
     }
 }
 
@@ -642,7 +659,7 @@ function execute(command) {
             showCommands();
             break;
         default:
-            showCommands(`${JSON.stringify(parts[0])} isn't a command. `);
+            terminal.writeLine(`(${JSON.stringify(parts[0])} isn't a command. Enter "?" to see a list of commands.)`);
         }
     } catch(err) {
         if (log.debug()) log.debug(err);
@@ -652,9 +669,9 @@ function execute(command) {
     setCommandMode(nextCommandMode);
 } // execute
 
-function showCommands(preamble) {
+function showCommands() {
     [
-        `${preamble || ''}The available commands are:`,
+        "The available commands are:",
         "u[nproto] callSign [via callSign,...]",
         "          : Send the following data in UI packets to that call sign via",
         "          : those digipeaters.",
@@ -789,7 +806,7 @@ function connect(parts) {
         via: via || undefined,
         ID: myID || undefined,
     };
-    const viaNote = (showVia && via) ? ` via ${via}` : '';
+    const viaNote = noteVia(via);
     terminal.writeLine(`(Connecting to ${remote}${viaNote}...)`);
     const newConnection = AGWPE.createConnection(options, function(data) {
         try {
@@ -842,8 +859,7 @@ function onConnected(newConnection, remote, via) {
 function showAllConnections() {
     Object.keys(allConnections).forEach(function(remoteAddress) {
         const via = allConnections[remoteAddress].via;
-        const viaNote = (showVia && via) ? ` via ${via}` : '';
-        terminal.writeLine(`connect ${remoteAddress}${viaNote}`);
+        terminal.writeLine(`connect ${remoteAddress}${noteVia(via)}`);
     });
 } // showAllConnections
 
@@ -1113,7 +1129,7 @@ try {
     terminal.on('escape', function() {
         log.debug('terminal escape');
         if (commandMode && !(connected || remoteAddress)) {
-            terminal.writeLine('(Enter "u <call sign>" or "c <call sign>" to set a destination address.)');
+            terminal.writeLine('(Enter "unproto <call sign>" or "connect <call sign>" to set a destination address.)');
         } else {
             setCommandMode(!commandMode);
         }
@@ -1121,7 +1137,6 @@ try {
     setDataPrompt();
     setCommandMode(!remoteAddress);
     restartServer(tncPort);
-    terminal.on('line', interpret);
 } catch(err) {
     log.debug(err);
     process.stderr.write(`${err}`);
