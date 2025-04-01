@@ -5,7 +5,6 @@ const fs = require('fs');
 const OS = require('os');
 const shared = require('./shared.js');
 const Stream = require('stream');
-const END = {};
 
 class FileHelper extends Stream.Writable {
 
@@ -24,7 +23,6 @@ class FileHelper extends Stream.Writable {
 
     _final(callback) {
         this.buffer.push(callback);
-        this.buffer.push(END);
         this.emit('input');
     }
 } // FileHelper
@@ -69,6 +67,12 @@ class Lines extends EventEmitter {
         });
         helper.on('input', function() {
             that.onInput();
+        });
+        helper.on('finish', function() {
+            helper.buffer.push(function() {
+                that.emit('debug', `${that.inputs.length} finish`);
+                that.inputs.pop();
+            });
         });
     }
 
@@ -139,12 +143,9 @@ class Lines extends EventEmitter {
             const item = input.data.shift();
             var event = null;
             var output = '';
-            if ((typeof item) == 'function') { // a callback
-                this.emit('debug', `${this.inputs.length} onInput callback`);
+            if ((typeof item) == 'function') { // callback or finish
                 item();
-            } else if (item === END) {
-                this.emit('debug', `${this.inputs.length} onInput END`);
-                this.inputs.pop();
+                // The item may modify this.inputs. So re-examine them.
             } else if (item) { // input character string
                 this.emit('debug', `${this.inputs.length} ${input.sawCR} onInput ${JSON.stringify(item)})`);
                 var i;
@@ -188,7 +189,7 @@ class Lines extends EventEmitter {
                     }
                     input.sawCR = (c == '\r');
                 }
-                // An event handler might modify this.events, for example by calling this.readFile.
+                // An event handler might modify this.inputs, for example by calling this.readFile.
                 // So, don't parse any more input characters yet:
                 if (i < item.length) {
                     input.data.unshift(item.substring(i));
