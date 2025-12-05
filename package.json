@@ -31,6 +31,6 @@
   },
   "homepage": "https://github.com/jmkristian/agwpe-tools#readme",
   "devDependencies": {
-    "pkg": "4"
+    "@yao-pkg/pkg": "6.10"
   }
 }
