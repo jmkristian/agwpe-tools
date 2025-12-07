@@ -37,13 +37,22 @@ On Linux:
 4. `chmod +x converse`
 5. `./converse <your call sign> <remote call sign> --verbose`
 
+On Raspberry Pi:
+1. Download the latest version of `converse.armv7`
+   [here](https://github.com/jmkristian/agwpe-tools/releases).
+   It's in the Assets section of each release.
+2. Open a terminal emulator (shell) window.
+3. `cd` to the directory that contains converse.armv7.
+4. `chmod +x converse.armv7`
+5. `./converse.armv7 <your call sign> <remote call sign> --verbose`
+
 You can watch a video demonstrating this
 on [Windows](https://youtu.be/lRvlnEeBrow/)
 or [Linux](https://youtu.be/3QpdWmihQBI).
 
 To see a summary of the command line options, run converse with no arguments.
-To see a summary of commands you can give to converse,
-pause a conversation and enter ? (a question mark).
+To see a summary of commands you can give to converse, run converse,
+pause the conversation and enter ? (a question mark).
 
 To communicate large amounts of text,
 you can copy-n-paste to or from your command line window.
@@ -53,7 +62,7 @@ be sure to select the complete width of the screen buffer.
 Characters sent to the remote station and received from the remote station
 are encoded as specified by the command line option --encoding.
 
-You can customize converse.exe.
+You can use converse to make your own customized software.
 For example, see how to poll a BBS
 on [Windows](BBS_polling.md)
 or [Linux](BBS_polling_linux.md).
@@ -62,38 +71,39 @@ or [Linux](BBS_polling_linux.md).
 
 Download and run chatter the same way as converse.
 On Linux, run `chmod +x chatter` after you download it.
+On Raspberry Pi, run `chmod +x chatter.armv7` after you download it.
 To see a summary of its command line options, run it with no arguments.
 
-To get started using chatter, run
+To get started using chatter, first start your TNC (e.g. Direwolf or SoundModem).
+Then run
 `.\chatter.exe <your call sign>` on Windows or
-`./chatter <your call sign>` on Linux.
+`./chatter <your call sign>` on Linux or
+`./chatter.armv7 <your call sign>` on Raspberry Pi.
 Then enter `?` to see a summary of all the commands.
 To send data, enter an `unproto` or `connect` command;
 then type the data you want to send.
 
-Chatter outputs a summary of all the data that AGWPE receives.
-You can filter out some of the data using `hide` and `show` commands.
-
-By default, chatter hides packets that it hears repeatedly.
+Chatter outputs a summary of all the packets that the TNC receives.
+You can filter out some of the packets using `hide` and `show` commands.
+By default, chatter hides packets that it receives repeatedly.
 Usually this means packets that are retransmitted by digipeaters.
 In general, it won't show a packet that's
-the same (except for digipeaters) as another packet it heard recently.
+the same (except for digipeaters) as another packet it received recently.
 To see the repetitive packets, enter the command `show repeats`.
 
-If you don't specify the 'via' option to 'connect' or 'unproto' commands,
+If you don't specify the 'via' option to `connect` or `unproto` commands,
 chatter will try to use a short sequence of digipeaters.
 To do this, it listens to all packets,
 observes the digipeaters that other stations use
-and picks out the shortest sequence that it heard directly from a digipeater.
-If it hears directly from a source station,
+and picks out the shortest sequence that it received directly from a digipeater.
+If it receives directly from a source station,
 it will send to that station directly, without using digipeaters.
-This system depends on hearing packets, so it doesn't work immediately.
-If you know the right digipeaters to use,
-use the `via` command to set the default for all stations,
-or specify a 'via' option to a 'connect' or 'unproto' command.
+This system depends on receiving packets, so it doesn't work immediately.
+If you know the digipeaters you want to use,
+specify a 'via' option to a `connect` or `unproto` command or
+use the `via` command to set the default for all stations.
 Chatter will use the digipeaters you specify.
-It might suggest a shorter sequence if it hears one repeatedly,
-but it won't override your choice.
+It might suggest a shorter sequence, but it won't override your choice.
 
 ### Using node
 
@@ -120,15 +130,17 @@ Here's how:
 To see a summary of the command line options, run either program with no arguments.
 
 This software requires node.js version 8.17 or later.
-It works on Windows 8, Ubuntu 20 and MacOS Sonoma 14.4.1, with
-[Direwolf](https://github.com/wb2osz/direwolf) version 1.7
+It works on Windows 8, Ubuntu 20, Raspbian 10 (Buster) and MacOS 14.4.1 (Sonoma),
+with [Direwolf](https://github.com/wb2osz/direwolf) version 1.7
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions.
 
-The Windows executable files were built by `build.cmd`,
-running with node.js version 12.22.12.
-The Linux executable files were built by `build.sh`,
-also running with node.js version 12.22.12.
+The executable files were built using node.js version 18.20.8.
+The Windows executable files were built by `build.cmd` on Windows 11.
+The Linux executable files were built by `build.sh` on Ubuntu 20.04.6 LTS (64 bit)
+on a VirtualBox machine hosted by Windows 11.
+The armv7 executable files were built by `build.armv7` on Debian GNU/Linux 13 (trixie)
+on a Raspberry Pi 3 Model B+.
 
 If you're willing to help make executable files for MacOS,
 please add a comment to

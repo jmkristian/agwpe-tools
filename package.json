@@ -13,6 +13,7 @@
     "minimist": "^1.2.8"
   },
   "scripts": {
+    "build.cmd": ".\\build.cmd",
     "test": "echo There are no tests.; exit 1"
   },
   "repository": {
@@ -31,6 +32,6 @@
   },
   "homepage": "https://github.com/jmkristian/agwpe-tools#readme",
   "devDependencies": {
-    "pkg": "4"
+    "@yao-pkg/pkg": "6.10"
   }
 }

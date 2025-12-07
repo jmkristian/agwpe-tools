@@ -3,7 +3,9 @@
 .#*
 *.exe
 /chatter
+/chatter.armv7
 /converse
+/converse.armv7
 /echo.js
 /node_modules
 /Thumbs.db
