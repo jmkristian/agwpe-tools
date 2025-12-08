@@ -21,30 +21,27 @@ It's useful for participating in a multi-station chat session.
 First start your TNC (e.g. Direwolf or SoundModem).
 
 On Windows:
-1. Download the latest version of `converse.exe`
-   [here](https://github.com/jmkristian/agwpe-tools/releases).
-   It's in the Assets section of each release.
+1. Download `converse.exe` from the Assets section of the
+   [Latest release](https://github.com/jmkristian/agwpe-tools/releases).
 2. Open a PowerShell or Command Prompt (CMD) window.
 3. `cd` to the folder that contains converse.exe.
-4. `.\converse.exe <your call sign> <remote call sign> --verbose`
+4. `.\converse.exe --verbose <your call sign> <remote call sign>`
 
 On Linux:
-1. Download the latest version of `converse`
-   [here](https://github.com/jmkristian/agwpe-tools/releases).
-   It's in the Assets section of each release.
+1. Download `converse` from the Assets section of the
+   [Latest release](https://github.com/jmkristian/agwpe-tools/releases).
 2. Open a terminal emulator (shell) window.
 3. `cd` to the directory that contains converse.
 4. `chmod +x converse`
-5. `./converse <your call sign> <remote call sign> --verbose`
+5. `./converse --verbose <your call sign> <remote call sign>`
 
 On Raspberry Pi:
-1. Download the latest version of `converse.armv7`
-   [here](https://github.com/jmkristian/agwpe-tools/releases).
-   It's in the Assets section of each release.
+1. Download `converse.armv7` from the Assets section of the
+   [Latest release](https://github.com/jmkristian/agwpe-tools/releases).
 2. Open a terminal emulator (shell) window.
 3. `cd` to the directory that contains converse.armv7.
 4. `chmod +x converse.armv7`
-5. `./converse.armv7 <your call sign> <remote call sign> --verbose`
+5. `./converse.armv7 --verbose <your call sign> <remote call sign>`
 
 You can watch a video demonstrating this
 on [Windows](https://youtu.be/lRvlnEeBrow/)
@@ -62,7 +59,7 @@ be sure to select the complete width of the screen buffer.
 Characters sent to the remote station and received from the remote station
 are encoded as specified by the command line option --encoding.
 
-You can use converse to make your own customized software.
+You can make your own software that uses converse.
 For example, see how to poll a BBS
 on [Windows](BBS_polling.md)
 or [Linux](BBS_polling_linux.md).
@@ -124,11 +121,12 @@ Here's how:
    Ignore messages about finding Python; they're harmless.
 5. Start your TNC (e.g. Direwolf).
 6. Run one of the programs, either:
-   - `node ./converse.js --verbose <your call sign> <remote call sign>`
+  - `node ./converse.js --verbose <your call sign> <remote call sign>`
    - `node ./chatter.js <your call sign>`
 
 To see a summary of the command line options, run either program with no arguments.
 
+### Details
 This software requires node.js version 8.17 or later.
 It works on Windows 8, Ubuntu 20, Raspbian 10 (Buster) and MacOS 14.4.1 (Sonoma),
 with [Direwolf](https://github.com/wb2osz/direwolf) version 1.7
@@ -145,3 +143,6 @@ on a Raspberry Pi 3 Model B+.
 If you're willing to help make executable files for MacOS,
 please add a comment to
 [issue #5](https://github.com/jmkristian/agwpe-tools/issues/5).
+
+[John Kristian](https://github.com/jmkristian) \<jmkristian@gmail.com\>
+created and maintains this project.
