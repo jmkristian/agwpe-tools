@@ -3,8 +3,10 @@
 .#*
 *.exe
 /chatter
+/chatter.arm64
 /chatter.armv7
 /converse
+/converse.arm64
 /converse.armv7
 /echo.js
 /node_modules

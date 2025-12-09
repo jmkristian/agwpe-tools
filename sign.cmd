@@ -1,5 +1,5 @@
-@REM Sign and timestamp %1 using the code signing .pfx file %2
-@SignTool Sign /fd SHA256 /f %2 %1
-@if %errorlevel% neq 0 exit /B %errorlevel%
-@SignTool Timestamp /tr "http://timestamp.sectigo.com" /td SHA256 %1
-@if %errorlevel% neq 0 exit /B %errorlevel%
+@REM Sign and timestamp %1
+@SignTool Sign /q /n "John Michael Kristian" /t http://time.certum.pl/ /fd SHA256 %1
+@REM if %ERRORLEVEL% neq 0 exit /B %ERRORLEVEL%
+@SignTool Verify /q /pa %1
+@REM if %ERRORLEVEL% neq 0 exit /B %ERRORLEVEL%

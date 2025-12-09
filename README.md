@@ -133,11 +133,11 @@ with [Direwolf](https://github.com/wb2osz/direwolf) version 1.7
 and [UZ7HO SoundModem](http://uz7.ho.ua/packetradio.htm) version 1.13.
 It might work with other versions.
 
-The executable files were built using node.js version 18.20.8.
+The executable files were built using node.js version 20.19.6.
 The Windows executable files were built by `build.cmd` on Windows 11.
 The Linux executable files were built by `build.sh` on Ubuntu 20.04.6 LTS (64 bit)
 on a VirtualBox machine hosted by Windows 11.
-The armv7 executable files were built by `build.armv7` on Debian GNU/Linux 13 (trixie)
+The armv7 executable files were built by `build.armv7` on Debian GNU/Linux 13.2 (trixie)
 on a Raspberry Pi 3 Model B+.
 
 If you're willing to help make executable files for MacOS,

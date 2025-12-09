@@ -4,9 +4,9 @@ cd `dirname "$0"` || exit $?
 npm install || exit $?
 
 test -e chatter.armv7 && rm chatter.armv7
-node_modules/.bin/pkg -t node18-linuxstatic-armv7 chatter.js || exit $?
+node_modules/.bin/pkg -t node20-linuxstatic-armv7 chatter.js || exit $?
 mv chatter chatter.armv7
 
 test -e converse.armv7 && rm converse.armv7
-node_modules/.bin/pkg -t node18-linuxstatic-armv7 converse.js || exit $?
+node_modules/.bin/pkg -t node20-linuxstatic-armv7 converse.js || exit $?
 mv converse converse.armv7
